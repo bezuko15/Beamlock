@@ -149,7 +149,23 @@ label.lbl { display: block; font-size: 12px; font-weight: 700; color: var(--mute
 .modal-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .step-list { display: grid; gap: 12px; margin: 16px 0; }
 .step-row { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 12px; }
-.step-row.ready, .step-row.in_progress { border-color: var(--amber); box-shadow: inset 3px 0 0 var(--amber); }
+.step-row.ready, .step-row.in_progress { border-color: var(--amber); animation: stepFlash 1.4s ease-in-out infinite; }
+@keyframes stepFlash {
+  0%, 100% { box-shadow: inset 4px 0 0 var(--amber); }
+  50% { box-shadow: inset 4px 0 0 var(--amber), 0 0 0 3px rgba(214,128,45,.45); }
+}
+.crew-panel { margin: 8px 0; }
+.crew-panel.prominent { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.crew-panel.compact { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.crew-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.crew-panel.compact .crew-field { flex-direction: row; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.crew-field .k { font-size: 11px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.crew-panel.prominent input { font-size: 18px; font-weight: 800; min-height: 48px; }
+.crew-panel.compact input { width: 116px; min-height: 36px; font-size: 14px; padding: 4px 8px; }
+.crew-source { font-size: 12px; color: var(--muted); }
+.crew-panel.prominent .crew-source { grid-column: 1 / -1; }
+.crew-panel.unavailable { background: #f5f5f4; border: 1px dashed #78716c; border-radius: 10px; padding: 8px; color: #57534e; }
+.crew-panel.unavailable input { background: #f5f5f4; color: #57534e; }
 .step-row.done { border-color: #a6dfc0; }
 .step-row.skipped { border-color: #78716c; background: #f5f5f4; box-shadow: inset 4px 0 0 #57534e; }
 .step-row .chip.skip { background: #44403c; color: #fff; border-color: #44403c; }
@@ -202,7 +218,7 @@ label.lbl { display: block; font-size: 12px; font-weight: 700; color: var(--mute
 .role-btn { min-height: 56px; border-radius: 12px; border: 2px solid var(--border); background: var(--panel2); font-weight: 750; cursor: pointer; }
 .role-btn.on { border-color: var(--amber); background: #fff4e8; color: var(--amber-dim); }
 
-.toast-wrap { position: fixed; top: 70px; right: 12px; z-index: 200; display: grid; gap: 8px; width: min(360px, calc(100% - 24px)); }
+.toast-wrap { position: fixed; bottom: 12px; right: 12px; z-index: 200; display: grid; gap: 8px; width: min(360px, calc(100% - 24px)); }
 .toast { background: var(--navy); border: 1px solid var(--amber); color: #fff; padding: 12px 14px; border-radius: 12px; box-shadow: var(--shadow); font-weight: 650; }
 
 .audit-list { display: grid; gap: 8px; font-size: 13px; }

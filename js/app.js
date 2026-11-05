@@ -715,6 +715,19 @@
     lines.push('Job title: ' + (job.title || '—'));
     lines.push('Status: ' + statusLabel(job));
     lines.push('Waiting on: ' + (wait ? (wait.label + ' (' + wait.trade + ')') : (job.status === 'done' && !job.on_hold ? 'Complete — nothing waiting' : '—')));
+    if (wait) {
+      const crew = readCrew(wait);
+      lines.push('Permit holder: ' + (crew.showValues && crew.holder ? crew.holder : '—'));
+      lines.push('Radio channel: ' + (crew.showValues && crew.channel ? crew.channel : '—'));
+      lines.push('Crew: ' + crew.sourceText);
+    }
+    lines.push('', 'Crew by step:');
+    (job.steps || []).forEach((s) => {
+      const crew = readCrew(s);
+      const holder = crew.showValues && crew.holder ? crew.holder : '—';
+      const channel = crew.showValues && crew.channel ? crew.channel : '—';
+      lines.push('- ' + s.label + ' (' + s.trade + '): ' + holder + ' · ' + channel + ' — ' + crew.sourceText);
+    });
     lines.push('', 'Sign-offs:');
     const signoffs = [];
     (job.steps || []).forEach((s) => {
@@ -924,6 +937,25 @@
       };
     });
     const reloadJob = async () => { await refreshAll(false); const next = state.jobs.find((j) => j.id === job.id); if (next) showJobModal(next); else root.innerHTML = ''; };
+    $$('[data-crew-field]', root).forEach((input) => {
+      input.dataset.orig = input.value;
+      const save = async () => {
+        const value = input.value.trim();
+        if (value === (input.dataset.orig || '').trim()) return;
+        const step = job.steps.find((s) => s.id === input.dataset.step);
+        if (!step) return;
+        const field = input.dataset.crewField;
+        const now = new Date().toISOString();
+        const { error } = await sb.from('steps').update({ [field]: value, crew_source: 'manual', crew_updated_by: state.user.name, crew_updated_at: now }).eq('id', step.id);
+        if (error) return toast(error.message);
+        input.dataset.orig = value;
+        await audit(job.id, field, (step.trade || step.label) + ': ' + (value || '(cleared)'));
+        await reloadJob();
+        toast(field === 'permit_holder' ? 'Permit holder saved' : 'Radio channel saved');
+      };
+      input.addEventListener('change', save);
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); input.blur(); } });
+    });
     $$('[data-skip]', root).forEach((btn) => {
       btn.onclick = async () => {
         const step = job.steps.find((s) => s.id === btn.dataset.skip);
@@ -1031,6 +1063,34 @@
       '<form class="comment-form" ' + attrs + '><label class="lbl">Add comment</label><textarea class="textarea" name="body" placeholder="Add a comment…"></textarea>' +
       '<div class="row"><input type="file" name="photos" accept="image/*" capture="environment" multiple /><button class="btn btn-primary btn-sm" type="submit">Add comment</button></div></form></div>';
   }
+  const CREW_FRESH_MS = 15 * 60 * 1000;
+  function readCrew(step) {
+    if ((step.crew_source || 'manual') === 'permit_vision') return readPermitVisionCrew(step);
+    const who = step.crew_updated_by ? ' · ' + step.crew_updated_by : '';
+    const when = step.crew_updated_at ? ' · ' + fmtTime(step.crew_updated_at) : '';
+    return { mode: 'manual', showValues: true, unavailable: false, holder: step.permit_holder || '', channel: step.radio_channel || '', sourceText: 'Entered manually' + who + when };
+  }
+  // Permit Vision adapter stub. Swap the body of this function when the feed exists.
+  // Stale or unavailable data is never shown as a current permit holder or channel.
+  function readPermitVisionCrew(step) {
+    const connected = false;
+    const at = step.crew_updated_at ? new Date(step.crew_updated_at).getTime() : NaN;
+    const age = Number.isFinite(at) ? Date.now() - at : Infinity;
+    const fresh = connected && age >= 0 && age <= CREW_FRESH_MS;
+    if (!fresh) {
+      return { mode: 'permit_vision', showValues: false, unavailable: true, holder: '', channel: '', sourceText: connected ? 'Permit Vision · stale — not validated' : 'Permit Vision unavailable — not validated' };
+    }
+    return { mode: 'permit_vision', showValues: true, unavailable: false, holder: step.permit_holder || '', channel: step.radio_channel || '', sourceText: 'From Permit Vision · updated ' + fmtTime(step.crew_updated_at) };
+  }
+  function crewPanel(step, prominent) {
+    const crew = readCrew(step);
+    const holder = crew.showValues ? crew.holder : '';
+    const channel = crew.showValues ? crew.channel : '';
+    return '<div class="crew-panel ' + (prominent ? 'prominent' : 'compact') + (crew.unavailable ? ' unavailable' : '') + '">' +
+      '<label class="crew-field"><span class="k">Permit holder</span><input class="input" data-crew-field="permit_holder" data-step="' + step.id + '" value="' + esc(holder) + '" placeholder="Name" /></label>' +
+      '<label class="crew-field"><span class="k">Radio channel</span><input class="input" data-crew-field="radio_channel" data-step="' + step.id + '" value="' + esc(channel) + '" placeholder="Ch" /></label>' +
+      '<div class="crew-source">' + esc(crew.sourceText) + '</div></div>';
+  }
   function stepHtml(s, job) {
     const canSign = !job.on_hold && (s.status === 'ready' || s.status === 'in_progress' || s.status === 'done');
     const skipped = s.status === 'skipped';
@@ -1044,7 +1104,9 @@
     const skipControl = skipped
       ? '<div class="skip-banner">Skipped' + (s.skipped_by ? ' · ' + esc(s.skipped_by) : '') + (s.skipped_at ? ' · ' + fmtTime(s.skipped_at) : '') + (s.skip_reason ? ' — ' + esc(s.skip_reason) : '') + '</div><button type="button" class="btn btn-sm" data-unskip="' + s.id + '">Undo skip</button>'
       : '<button type="button" class="btn btn-sm" data-skip="' + s.id + '">Skip / Already complete</button>';
+    const active = s.status === 'ready' || s.status === 'in_progress';
     return '<div class="step-row ' + s.status + '"><div class="step-head"><div class="step-label">' + esc(s.label) + ' <span class="chip">' + esc(s.trade) + '</span></div><div class="chip' + (skipped ? ' skip' : '') + '">' + (skipped ? 'Skipped' : esc(String(s.status).replaceAll('_', ' '))) + '</div></div>' +
+      crewPanel(s, active) +
       (people ? '<div class="assignees">' + people + '</div>' : '') + skipControl + commentBox(notes, 'data-step="' + s.id + '"') + '</div>';
   }
   function chooseDialog({ title, messageHtml, picks, allowEmpty, okLabel }) {
@@ -1181,7 +1243,7 @@
   function openImport() {
     const root = $('#modal-root');
     let preview = null; let mapping = {};
-    root.innerHTML = '<div class="overlay"><div class="modal"><div class="modal-head"><strong>Import backlog</strong><button class="btn btn-sm" id="close-imp">Close</button></div><div class="modal-body"><p style="color:var(--muted)">Upload .xlsx / .csv. Map columns, pick a default template, then import (client-side SheetJS → Supabase). Process unit is derived from the unit (Upgrader South → PU1 / PU2) and is not stored as its own column.</p><input type="file" id="imp-file" accept=".xlsx,.xls,.csv" /><div id="imp-body"></div></div></div></div>';
+    root.innerHTML = '<div class="overlay"><div class="modal"><div class="modal-head"><strong>Import backlog</strong><button class="btn btn-sm" id="close-imp">Close</button></div><div class="modal-body"><p style="color:var(--muted)">Upload .xlsx / .csv. Map columns, pick a default template, then import (client-side SheetJS → Supabase). Process unit is derived from the unit (Upgrader South → PU1 / PU2). Permit holder and radio channel from the sheet are written on the first trade step; each later trade fills in its own.</p><input type="file" id="imp-file" accept=".xlsx,.xls,.csv" /><div id="imp-body"></div></div></div></div>';
     $('#close-imp').onclick = () => { root.innerHTML = ''; };
     $('#imp-file').onchange = async (e) => {
       const file = e.target.files[0]; if (!file) return;
@@ -1191,10 +1253,10 @@
       preview = { headers: rows.length ? Object.keys(rows[0]) : [], rows, allRows: rows, total: rows.length };
       autoMap(); drawImport();
     };
-    const fields = [['wo_number','Work Order'],['sap_work_order','SAP Work Order'],['sap_notification','SAP Notification'],['permit_vision_id','Permit Vision #'],['functional_location','Functional Location'],['pid_number','P&ID / drawing #'],['equipment_location','Equipment location'],['title','Title'],['description','Description'],['unit','Unit'],['area','Area'],['equipment_tag','Tag'],['priority','Priority'],['job_date','Date'],['permit_number','Permit'],['loto_isolation','LOTO'],['trades','Trades']];
+    const fields = [['wo_number','Work Order'],['sap_work_order','SAP Work Order'],['sap_notification','SAP Notification'],['permit_vision_id','Permit Vision #'],['functional_location','Functional Location'],['pid_number','P&ID / drawing #'],['equipment_location','Equipment location'],['permit_holder','Permit holder'],['radio_channel','Radio channel'],['title','Title'],['description','Description'],['unit','Unit'],['area','Area'],['equipment_tag','Tag'],['priority','Priority'],['job_date','Date'],['permit_number','Permit'],['loto_isolation','LOTO'],['trades','Trades']];
     function autoMap() {
       mapping = {};
-      const guess = { wo_number:[/work\s*order/i,/^wo$/i], sap_work_order:[/sap\s*work/i], sap_notification:[/notif/i], permit_vision_id:[/permit\s*vision/i], functional_location:[/functional/i,/floc/i], pid_number:[/p\s*&?\s*id/i,/\bpid\b/i,/drawing/i], equipment_location:[/equip.*loc/i,/^location$/i,/elevation/i,/^grid$/i], title:[/^title$/i], description:[/desc/i,/title/i], unit:[/unit/i], area:[/area/i], equipment_tag:[/^tag$/i,/equip.*tag/i,/equipment(?!\s*loc)/i], priority:[/prior/i], job_date:[/date/i], permit_number:[/^permit$/i,/ptw/i], loto_isolation:[/loto/i], trades:[/trade/i] };
+      const guess = { wo_number:[/work\s*order/i,/^wo$/i], sap_work_order:[/sap\s*work/i], sap_notification:[/notif/i], permit_vision_id:[/permit\s*vision/i], functional_location:[/functional/i,/floc/i], pid_number:[/p\s*&?\s*id/i,/\bpid\b/i,/drawing/i], equipment_location:[/equip.*loc/i,/^location$/i,/elevation/i,/^grid$/i], permit_holder:[/permit\s*holder/i,/^holder$/i], radio_channel:[/radio/i], title:[/^title$/i], description:[/desc/i,/title/i], unit:[/unit/i], area:[/area/i], equipment_tag:[/^tag$/i,/equip.*tag/i,/equipment(?!\s*loc)/i], priority:[/prior/i], job_date:[/date/i], permit_number:[/^permit$/i,/ptw/i], loto_isolation:[/loto/i], trades:[/trade/i] };
       for (const [field, rxList] of Object.entries(guess)) { const hit = preview.headers.find((h) => rxList.some((rx) => rx.test(h))); if (hit) mapping[field] = hit; }
       if (!mapping.title && mapping.description) mapping.title = mapping.description;
     }
@@ -1226,6 +1288,9 @@
             if (error) throw error;
             for (let i = 0; i < tpl.steps.length; i++) {
               const { data: step } = await sb.from('steps').insert({ job_id: job.id, trade: tpl.steps[i].trade, label: tpl.steps[i].label, sort_order: i, status: i === 0 ? 'ready' : 'pending' }).select().single();
+              if (i === 0 && (get('permit_holder') || get('radio_channel'))) {
+                await sb.from('steps').update({ permit_holder: get('permit_holder'), radio_channel: get('radio_channel'), crew_source: 'manual', crew_updated_by: state.user.name, crew_updated_at: new Date().toISOString() }).eq('id', step.id);
+              }
               await sb.from('step_assignees').insert(defaultAssignees(tpl.steps[i].trade).map((a) => ({ step_id: step.id, person_id: a.person_id || null, person_name: a.person_name, signed_off: false })));
             }
             await audit(job.id, 'job_created', 'Imported ' + job.wo_number); n++;
@@ -1241,7 +1306,7 @@
     const rows = state.jobs.map((j) => {
       const waiting = waitingTrade(j);
       const place = puForUnit(j.unit);
-      return { 'Work Order': j.wo_number, 'SAP Work Order': j.sap_work_order, 'SAP Notification': j.sap_notification, 'Permit Vision': j.permit_vision_id, 'Functional Location': j.functional_location, 'P&ID': j.pid_number || '', 'Equipment location': j.equipment_location || '', Title: j.title, Unit: j.unit, PU: place.pu, Site: place.site, Area: j.area, Tag: j.equipment_tag, Priority: j.priority, Status: j.status, 'On Hold': j.on_hold ? 'Yes' : 'No', 'Hold Reason': j.hold_reason || '', 'Waiting On': waiting ? waiting.trade : '', Permit: j.permit_number, LOTO: j.loto_isolation, Date: j.job_date, Steps: j.steps.map((s) => s.label + ' [' + s.status + ']').join(' > ') };
+      return { 'Work Order': j.wo_number, 'SAP Work Order': j.sap_work_order, 'SAP Notification': j.sap_notification, 'Permit Vision': j.permit_vision_id, 'Functional Location': j.functional_location, 'P&ID': j.pid_number || '', 'Equipment location': j.equipment_location || '', 'Permit holder': waiting?.permit_holder || '', 'Radio channel': waiting?.radio_channel || '', Title: j.title, Unit: j.unit, PU: place.pu, Site: place.site, Area: j.area, Tag: j.equipment_tag, Priority: j.priority, Status: j.status, 'On Hold': j.on_hold ? 'Yes' : 'No', 'Hold Reason': j.hold_reason || '', 'Waiting On': waiting ? waiting.trade : '', Permit: j.permit_number, LOTO: j.loto_isolation, Date: j.job_date, 'Step crews': (j.steps || []).map((s) => s.trade + ': ' + (s.permit_holder || '—') + ' / ' + (s.radio_channel || '—')).join(' > '), Steps: j.steps.map((s) => s.label + ' [' + s.status + ']').join(' > ') };
     });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Jobs');
