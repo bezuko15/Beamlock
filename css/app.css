@@ -166,6 +166,15 @@ label.lbl { display: block; font-size: 12px; font-weight: 700; color: var(--mute
 .crew-panel.prominent .crew-source { grid-column: 1 / -1; }
 .crew-panel.unavailable { background: #f5f5f4; border: 1px dashed #78716c; border-radius: 10px; padding: 8px; color: #57534e; }
 .crew-panel.unavailable input { background: #f5f5f4; color: #57534e; }
+.beam-step { margin: 6px 0 8px; }
+.beam-step-name { font-weight: 750; margin-bottom: 4px; }
+.beam-info { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
+.unit-tap { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 12px; }
+.dropzone {
+  border: 2px dashed var(--border); border-radius: 14px; padding: 22px 14px; text-align: center;
+  background: var(--panel); color: var(--muted); font-weight: 700; cursor: pointer;
+}
+.dropzone.over { border-color: var(--amber); background: #fff4e8; color: var(--navy); }
 .step-row.done { border-color: #a6dfc0; }
 .step-row.skipped { border-color: #78716c; background: #f5f5f4; box-shadow: inset 4px 0 0 #57534e; }
 .step-row .chip.skip { background: #44403c; color: #fff; border-color: #44403c; }

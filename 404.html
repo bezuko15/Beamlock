@@ -113,7 +113,9 @@
       <section id="view-planner" class="hidden">
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px">
           <button class="btn btn-primary" id="btn-new-job">+ New job</button>
-          <button class="btn" id="btn-import">Import Excel / CSV</button>
+          <button class="btn btn-primary" id="btn-beam-import">Import Beam sheet</button>
+          <a class="btn" href="./sample/beam-sample.xlsx" download>Download Beam sample</a>
+          <button class="btn" id="btn-import">Other Excel / CSV</button>
           <a class="btn" href="./sample/sample-backlog.xlsx" download>Download sample backlog</a>
           <button class="btn" id="btn-export">Export Excel</button>
         </div>
@@ -169,6 +171,9 @@
         <h3>Process areas</h3>
         <p style="color:var(--muted);margin-top:0">Site / area, then each process unit and its plant units. A site name on its own line, then <code>PU: unit, unit</code>. Jobs take their PU from the unit. Used by filters, the board, import, and export.</p>
         <textarea class="textarea" id="adm-sites" rows="6" placeholder="Upgrader South&#10;PU1: HMU, RHC&#10;PU2: A&amp;V, SRU, COGEN, Waterblock"></textarea>
+        <h3>Beam unit mapping</h3>
+        <p style="color:var(--muted);margin-top:0">Used only by Beam sheet import. One line: <code>pattern = unit</code>. First match wins against plant section, location, GSAP unit, and functional location. Anything else lands on Unassigned.</p>
+        <textarea class="textarea" id="adm-unit-map" rows="8" placeholder="RHC = RHC&#10;A&amp;V = A&amp;V&#10;AV = A&amp;V&#10;SRU = SRU&#10;COGEN = COGEN&#10;Waterblock = Waterblock&#10;HMU = HMU"></textarea>
         <h3>App tiles</h3>
         <div id="adm-tiles"></div>
         <button class="btn btn-primary" id="adm-save" style="margin-top:12px">Save integration settings</button>

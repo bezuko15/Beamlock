@@ -38,6 +38,16 @@
   };
   const TRADE_SHORT = { Insulator: 'INS', Electrician: 'EL', Pipefitter: 'FIT', NDE: 'NDE' };
   const DEFAULT_UNITS = ['RHC', 'A&V', 'SRU', 'COGEN', 'Waterblock', 'HMU'];
+  const DEFAULT_UNIT_PATTERNS = [
+    { pattern: 'Waterblock', unit: 'Waterblock' },
+    { pattern: 'COGEN', unit: 'COGEN' },
+    { pattern: 'RHC', unit: 'RHC' },
+    { pattern: 'SRU', unit: 'SRU' },
+    { pattern: 'HMU', unit: 'HMU' },
+    { pattern: 'A&V', unit: 'A&V' },
+    { pattern: 'A and V', unit: 'A&V' },
+    { pattern: 'AV', unit: 'A&V' },
+  ];
   const DEFAULT_SITES = [
     { name: 'Upgrader South', processUnits: [
       { name: 'PU1', units: ['HMU', 'RHC'] },
@@ -186,7 +196,7 @@
     return { counts, other, total: jobs.length };
   }
   function unitTabsHtml(selected, jobs, idPrefix, unitsOverride) {
-    const units = unitsOverride || getUnits();
+    const units = unitsOverride || listUnits();
     const { counts, total } = unitCounts(jobs, units);
     const sel = selected || '';
     let html = '<button type="button" class="unit-chip' + (!sel ? ' on' : '') + '" data-unit="" data-unit-tab="' + idPrefix + '">All<span class="count">' + total + '</span></button>';
@@ -287,6 +297,9 @@
     }
     if (!Array.isArray(state.settings.data_source.sites) || !state.settings.data_source.sites.length) {
       state.settings.data_source.sites = cloneSites(DEFAULT_SITES);
+    }
+    if (!Array.isArray(state.settings.data_source.unit_patterns) || !state.settings.data_source.unit_patterns.length) {
+      state.settings.data_source.unit_patterns = DEFAULT_UNIT_PATTERNS.map((p) => ({ ...p }));
     }
     state.tiles = tiles || [];
   }
@@ -412,7 +425,7 @@
       const qq = q.toLowerCase();
       list = list.filter((j) => {
         const place = puForUnit(j.unit);
-        return [j.wo_number, j.title, j.equipment_tag, j.unit, j.area, j.description, j.sap_work_order, j.sap_notification, j.permit_vision_id, j.functional_location, j.pid_number, j.equipment_location, place.pu, place.site].join(' ').toLowerCase().includes(qq);
+        return [j.wo_number, j.title, j.equipment_tag, j.unit, j.area, j.description, j.sap_work_order, j.sap_notification, j.permit_vision_id, j.functional_location, j.pid_number, j.equipment_location, place.pu, place.site, beamText(j)].join(' ').toLowerCase().includes(qq);
       });
     }
     if (status === 'on_hold') list = list.filter((j) => j.on_hold);
@@ -428,6 +441,7 @@
     const wait = waitingTrade(job);
     const mine = isMyTurn(job);
     const place = puForUnit(job.unit);
+    const due = dueInfo(job);
     const steps = job.steps.map((s) => '<span class="step-pip ' + s.status + '" title="' + esc(s.label) + '">' + (TRADE_SHORT[s.trade] || s.trade.slice(0, 2)) + '</span>').join('');
     return '<article class="job-card priority-' + esc(job.priority) + (job.on_hold ? ' on-hold' : '') + (mine ? ' your-turn' : '') + '" data-id="' + job.id + '" data-pu="' + esc(place.pu) + '" data-site="' + esc(place.site) + '">' +
       '<div class="job-top"><div class="wo">' + esc(job.wo_number) + '</div><div class="chip ' + (job.on_hold ? 'bad' : job.status === 'done' ? 'ok' : 'hot') + '">' + (job.on_hold ? 'ON HOLD' : esc(String(job.status).replace('_', ' '))) + '</div></div>' +
@@ -441,6 +455,7 @@
       (job.pid_number ? '<span class="chip">P&ID: ' + esc(job.pid_number) + '</span>' : '') +
       (job.equipment_location ? '<span class="chip">Loc: ' + esc(job.equipment_location) + '</span>' : '') +
       '<span class="chip">' + esc(job.priority) + '</span>' +
+      (due ? '<span class="chip ' + due.cls + '">' + esc(due.label) + '</span>' : '') +
       (wait ? '<span class="chip hot">Waiting: ' + esc(wait.trade) + '</span>' : '') +
       (mine ? '<span class="chip hot">YOUR TURN</span>' : '') +
       '</div><div class="steps-mini">' + steps + '</div>' +
@@ -473,7 +488,7 @@
         html += '<optgroup label="' + esc(site.name + ' · ' + pu.name) + '">' + opts + '</optgroup>';
       }
     }
-    const rest = getUnits().filter((u) => !seen.has(u));
+    const rest = listUnits().filter((u) => !seen.has(u));
     if (rest.length) html += '<optgroup label="Other">' + rest.map((u) => '<option value="' + esc(u) + '"' + (cur === u ? ' selected' : '') + '>' + esc(u) + '</option>').join('') + '</optgroup>';
     sel.innerHTML = html;
   }
@@ -600,6 +615,8 @@
     if (unitsEl) unitsEl.value = getUnits().join('\n');
     const sitesEl = $('#adm-sites');
     if (sitesEl) sitesEl.value = formatSites(getSites());
+    const mapEl = $('#adm-unit-map');
+    if (mapEl) mapEl.value = formatUnitPatterns(getUnitPatterns());
     $('#adm-tiles').innerHTML = state.tiles.map((t, i) =>
       '<div class="tile-edit" data-i="' + i + '"><input class="input" data-k="icon" value="' + esc(t.icon || '') + '" /><input class="input" data-k="name" value="' + esc(t.name || '') + '" /><input class="input" data-k="url" value="' + esc(t.url || '') + '" placeholder="https://…" /><input class="input" data-k="description" value="' + esc(t.description || '') + '" style="grid-column:1/-1" /></div>'
     ).join('');
@@ -856,6 +873,8 @@
       (job.equipment_location ? '<div class="equip-loc"><span class="k">Equipment location</span><span class="v">' + esc(job.equipment_location) + '</span></div>' : '') +
       (job.on_hold ? '<div class="hold-banner">ON HOLD — ' + esc(job.hold_reason || '') + ' (' + esc(job.hold_by || '') + ')</div>' : '') +
       '<p style="color:var(--muted);margin-top:0">' + esc(job.description || '') + '</p>' +
+      beamInfoHtml(job) +
+      unitTapHtml(job) +
       '<div class="meta"><span class="chip">Permit: ' + esc(job.permit_number || '—') + '</span><span class="chip">LOTO: ' + esc(job.loto_isolation || '—') + '</span>' +
       '<span class="chip">SAP WO: ' + esc(job.sap_work_order || job.wo_number || '—') + '</span><span class="chip">SAP notif: ' + esc(job.sap_notification || '—') + '</span>' +
       '<span class="chip">PV: ' + esc(job.permit_vision_id || '—') + '</span><span class="chip">FLoc: ' + esc(job.functional_location || '—') + '</span>' +
@@ -945,6 +964,17 @@
       };
     });
     const reloadJob = async () => { await refreshAll(false); const next = state.jobs.find((j) => j.id === job.id); if (next) showJobModal(next); else root.innerHTML = ''; };
+    $$('[data-set-unit]', root).forEach((btn) => {
+      btn.onclick = async () => {
+        const unit = btn.dataset.setUnit;
+        const beam = { ...(job.beam || {}), unit_source: 'manual' };
+        const { error } = await sb.from('jobs').update({ unit, beam, updated_at: new Date().toISOString() }).eq('id', job.id);
+        if (error) return toast(error.message);
+        await audit(job.id, 'unit_set', unit);
+        await reloadJob();
+        toast('Unit set to ' + unit);
+      };
+    });
     $$('[data-crew-field]', root).forEach((input) => {
       input.dataset.orig = input.value;
       const save = async () => {
@@ -1115,6 +1145,7 @@
     const active = s.status === 'ready' || s.status === 'in_progress';
     return '<div class="step-row ' + s.status + '"><div class="step-head"><div class="step-label">' + esc(s.label) + ' <span class="chip">' + esc(s.trade) + '</span></div><div class="chip' + (skipped ? ' skip' : '') + '">' + (skipped ? 'Skipped' : esc(String(s.status).replaceAll('_', ' '))) + '</div></div>' +
       crewPanel(s, active) +
+      beamStepHtml(s) +
       (people ? '<div class="assignees">' + people + '</div>' : '') + skipControl + commentBox(notes, 'data-step="' + s.id + '"') + '</div>';
   }
   function chooseDialog({ title, messageHtml, picks, allowEmpty, okLabel }) {
@@ -1248,6 +1279,380 @@
     renderEditor();
   }
 
+  function listUnits() {
+    const u = getUnits();
+    if (!u.some((x) => unitKey(x) === 'unassigned')) u.push('Unassigned');
+    return u;
+  }
+  function getUnitPatterns() {
+    const raw = state.settings?.data_source?.unit_patterns;
+    if (Array.isArray(raw) && raw.length) return raw.map((p) => ({ pattern: String(p.pattern || '').trim(), unit: String(p.unit || '').trim() })).filter((p) => p.pattern && p.unit);
+    return DEFAULT_UNIT_PATTERNS.map((p) => ({ ...p }));
+  }
+  function parseUnitPatterns(text) {
+    return String(text || '').split(/\n/).map((line) => {
+      const i = line.indexOf('=');
+      if (i < 1) return null;
+      return { pattern: line.slice(0, i).trim(), unit: line.slice(i + 1).trim() };
+    }).filter((p) => p && p.pattern && p.unit);
+  }
+  function formatUnitPatterns(list) {
+    return (list || []).map((p) => p.pattern + ' = ' + p.unit).join('\n');
+  }
+  function beamText(job) {
+    const b = job.beam || {};
+    return [b.planningWeek, b.plantSection, b.location, b.gsapUnit, b.orderType, b.userStatus, b.abc, b.leadDiscipline].filter(Boolean).join(' ');
+  }
+  function dueInfo(job) {
+    const raw = job.beam?.dueDate;
+    if (!raw) return null;
+    const due = new Date(raw);
+    if (Number.isNaN(due.getTime())) return null;
+    const today = new Date(edmontonParts(new Date()).dayKey + 'T00:00:00');
+    const dueDay = new Date(edmontonParts(due).dayKey + 'T00:00:00');
+    const days = Math.round((dueDay - today) / 86400000);
+    const pretty = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Edmonton', month: 'short', day: 'numeric' }).format(due);
+    if (days < 0) return { kind: 'overdue', cls: 'hot', label: 'Overdue ' + pretty };
+    if (days <= 7) return { kind: 'soon', cls: 'hot', label: 'Due soon ' + pretty };
+    return { kind: 'ok', cls: 'ok', label: 'On time ' + pretty };
+  }
+  function beamInfoHtml(job) {
+    const b = job.beam || {};
+    const bits = [b.planningWeek && ('Week ' + b.planningWeek), b.plantSection && ('Section ' + b.plantSection), b.location && ('Loc ' + b.location), b.gsapUnit && ('GSAP ' + b.gsapUnit), b.orderType && ('Type ' + b.orderType), b.abc && ('ABC ' + b.abc), b.userStatus].filter(Boolean);
+    const due = dueInfo(job);
+    if (!bits.length && !due) return '';
+    return '<div class="beam-info">' + bits.map((t) => '<span class="chip">' + esc(t) + '</span>').join('') + (due ? '<span class="chip ' + due.cls + '">' + esc(due.label) + '</span>' : '') + '</div>';
+  }
+  function unitTapHtml(job) {
+    if (!['Planner', 'Supervisor'].includes(state.user?.role)) return '';
+    return '<div class="unit-tap"><span class="lbl">Unit</span>' + listUnits().map((u) => '<button type="button" class="unit-chip' + (job.unit === u ? ' on' : '') + '" data-set-unit="' + esc(u) + '">' + esc(u) + '</button>').join('') + '</div>';
+  }
+  function beamStepHtml(s) {
+    const b = s.beam || {};
+    const chips = [b.workCenter, b.crew && ('Crew ' + b.crew), b.originalDuration && ('Orig ' + b.originalDuration), b.remDuration && ('Rem ' + b.remDuration), b.earlyStart && ('Start ' + b.earlyStart), b.cranes && ('Cranes ' + b.cranes)].filter(Boolean);
+    if (!chips.length) return '';
+    return '<div class="beam-step"><div class="meta">' + chips.map((t) => '<span class="chip">' + esc(t) + '</span>').join('') + '</div></div>';
+  }
+  function normBeamHeader(value) {
+    return String(value ?? '').replace(/\([^)]*\)/g, ' ').replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+  function patternHits(hay, pattern) {
+    const h = String(hay || '');
+    const p = String(pattern || '');
+    if (!p) return false;
+    if (p.length <= 3 && /^[a-z0-9&]+$/i.test(p)) {
+      const re = new RegExp('(^|[^A-Za-z0-9])' + p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '([^A-Za-z0-9]|$)', 'i');
+      return re.test(h);
+    }
+    return h.toLowerCase().includes(p.toLowerCase());
+  }
+  function assignBeamUnit(parts) {
+    const hay = [parts.plantSection, parts.location, parts.gsapUnit, parts.functionalLocation].filter(Boolean).join(' ');
+    const patterns = getUnitPatterns().slice().sort((a, b) => b.pattern.length - a.pattern.length);
+    for (const p of patterns) if (patternHits(hay, p.pattern)) return normalizeUnit(p.unit) || p.unit;
+    return 'Unassigned';
+  }
+  function mapBeamPriority(raw) {
+    const n = parseInt(String(raw ?? '').trim(), 10);
+    if (n === 1) return 'Critical';
+    if (n === 2) return 'High';
+    if (n === 4 || n === 5) return 'Low';
+    return 'Normal';
+  }
+  function parseBeamDate(value) {
+    if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+    if (typeof value === 'number' && value > 20000 && value < 80000 && window.XLSX?.SSF?.parse_date_code) {
+      const p = XLSX.SSF.parse_date_code(value);
+      if (p) return new Date(p.y, p.m - 1, p.d, p.H || 0, p.M || 0, Math.round(p.S || 0));
+    }
+    const s = String(value ?? '').trim();
+    if (!s) return null;
+    const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2}))?/);
+    if (m) return new Date(+m[3], +m[1] - 1, +m[2], +(m[4] || 0), +(m[5] || 0));
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  function fmtBeamDate(value) {
+    const d = parseBeamDate(value);
+    if (!d) return String(value ?? '').trim();
+    return new Intl.DateTimeFormat('en-US', { month: 'numeric', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }).format(d);
+  }
+  function equipmentTagFromFloc(floc) {
+    const parts = String(floc || '').split(/[-./]/).map((s) => s.trim()).filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : '';
+  }
+  function classifyBeamTrade(workCenter, lead) {
+    const wc = String(workCenter || '').toUpperCase();
+    const ld = String(lead || '').toUpperCase();
+    const code = (wc.split(/[^A-Z0-9]+/).filter(Boolean).pop() || wc);
+    const text = wc + ' ' + ld;
+    if (code === 'ELE' || /\bELECTR/.test(text)) return { trade: 'Electrician', known: true };
+    if (code === 'INS' || /INSUL/.test(text)) return { trade: 'Insulator', known: true };
+    if (['PIP', 'FIT', 'MEC'].includes(code) || /PIPE\s*FIT|PIPEFIT/.test(text)) return { trade: 'Pipefitter', known: true };
+    if (code === 'NDE' || code === 'INSP' || /\bINSPECT/.test(text)) return { trade: 'NDE', known: true };
+    const words = String(lead || '').replace(/\s+/g, ' ').trim().split(' ').filter((w) => !/^SCT-/i.test(w) && !/^[A-Z0-9]{2,5}-[A-Z0-9]{2,5}$/i.test(w));
+    let name = words.join(' ').replace(/\s*-\s*FACILITIES.*/i, '').trim();
+    if (name === name.toUpperCase() && name) name = name.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+    return { trade: name || workCenter || 'Other', known: false };
+  }
+  const BEAM_FIELDS = [
+    ['planningWeek', ['planning week']],
+    ['plantSection', ['a - plant section', 'plant section']],
+    ['location', ['location']],
+    ['gsapUnit', ['unit']],
+    ['leadDiscipline', ['lead discipline']],
+    ['orderType', ['order type']],
+    ['abc', ['abc ind', 'abc']],
+    ['activityId', ['activity id']],
+    ['priority', ['p']],
+    ['shortText', ['order short text']],
+    ['functionalLocation', ['functional location']],
+    ['workCenter', ['resource ids', 'work center']],
+    ['activityName', ['activity name', 'operation short text']],
+    ['crew', ['crew']],
+    ['originalDuration', ['original duration']],
+    ['remDuration', ['rem duration']],
+    ['earlyStart', ['rem early start', 'basic start date']],
+    ['lafd', ['order latest allowed finish', 'lafd']],
+    ['basicFinish', ['order basic finish', 'gsap order finish', 'order finish date']],
+    ['cranes', ['cranes am/pm', 'cranes']],
+    ['userStatus', ['order user status', 'user status']],
+  ];
+  function detectBeamColumns(headerCells) {
+    const norms = headerCells.map((h) => normBeamHeader(h));
+    const used = new Set();
+    const map = {};
+    const aliases = BEAM_FIELDS.flatMap(([field, list]) => list.map((alias) => ({ field, alias }))).sort((a, b) => b.alias.length - a.alias.length);
+    norms.forEach((norm, index) => {
+      if (!norm || used.has(index)) return;
+      const hit = aliases.find((a) => !map[a.field] && (norm === a.alias || (a.alias.length > 2 && norm.startsWith(a.alias))));
+      if (!hit) return;
+      map[hit.field] = index;
+      used.add(index);
+    });
+    return map;
+  }
+  function beamHeaderScore(map) {
+    return ['activityId', 'shortText', 'functionalLocation', 'workCenter', 'activityName'].filter((k) => map[k] != null).length;
+  }
+  function parseBeamMatrix(matrix) {
+    let headerRow = -1;
+    let map = null;
+    for (let i = 0; i < Math.min(matrix.length, 30); i++) {
+      const candidate = detectBeamColumns(matrix[i] || []);
+      if (beamHeaderScore(candidate) >= 3) { headerRow = i; map = candidate; break; }
+    }
+    if (headerRow < 0) return { error: 'Could not find the Beam header row. Expected columns such as Activity ID and Order Short Text.' };
+    let remembered = false;
+    try {
+      const saved = JSON.parse(localStorage.getItem('bl_beam_map') || 'null');
+      const sig = (matrix[headerRow] || []).map(normBeamHeader).join('|');
+      if (saved && saved.sig === sig && saved.map) { map = saved.map; remembered = true; }
+    } catch { /* ignore */ }
+    const orders = new Map();
+    const skipped = [];
+    for (let r = headerRow + 1; r < matrix.length; r++) {
+      const row = matrix[r] || [];
+      const cell = (key) => row[map[key]] ?? '';
+      const blank = row.every((c) => String(c ?? '').trim() === '');
+      if (blank) continue;
+      const activityId = String(cell('activityId') ?? '').trim();
+      if (!activityId) { skipped.push({ row: r + 1, reason: 'Missing Activity ID' }); continue; }
+      const splitAt = activityId.indexOf('-');
+      if (splitAt <= 0) { skipped.push({ row: r + 1, reason: 'Activity ID has no order-operation split: ' + activityId }); continue; }
+      const orderNo = activityId.slice(0, splitAt).trim();
+      const operation = activityId.slice(splitAt + 1).trim();
+      if (!orderNo || !operation) { skipped.push({ row: r + 1, reason: 'Activity ID is incomplete: ' + activityId }); continue; }
+      const floc = String(cell('functionalLocation') ?? '').trim();
+      const classified = classifyBeamTrade(cell('workCenter'), cell('leadDiscipline'));
+      const activityName = String(cell('activityName') ?? '').trim();
+      const step = {
+        operation, operationNum: parseInt(operation, 10) || 0, activityId,
+        activityName, crew: String(cell('crew') ?? '').trim(),
+        originalDuration: String(cell('originalDuration') ?? '').trim(),
+        remDuration: String(cell('remDuration') ?? '').trim(),
+        earlyStart: fmtBeamDate(cell('earlyStart')),
+        earlyStartIso: parseBeamDate(cell('earlyStart'))?.toISOString() || '',
+        cranes: String(cell('cranes') ?? '').trim(),
+        workCenter: String(cell('workCenter') ?? '').trim(),
+        leadDiscipline: String(cell('leadDiscipline') ?? '').trim(),
+        trade: classified.trade, known: classified.known,
+      };
+      if (!orders.has(orderNo)) {
+        orders.set(orderNo, {
+          orderNo,
+          shortText: String(cell('shortText') ?? '').trim(),
+          planningWeek: String(cell('planningWeek') ?? '').trim(),
+          plantSection: String(cell('plantSection') ?? '').trim(),
+          location: String(cell('location') ?? '').trim(),
+          gsapUnit: String(cell('gsapUnit') ?? '').trim(),
+          leadDiscipline: step.leadDiscipline,
+          orderType: String(cell('orderType') ?? '').trim(),
+          abc: String(cell('abc') ?? '').trim(),
+          priorityRaw: cell('priority'),
+          functionalLocation: floc,
+          userStatus: String(cell('userStatus') ?? '').trim(),
+          lafd: parseBeamDate(cell('lafd')),
+          basicFinish: parseBeamDate(cell('basicFinish')),
+          steps: [],
+        });
+      }
+      const order = orders.get(orderNo);
+      if (!order.shortText && step) order.shortText = String(cell('shortText') ?? '').trim();
+      if (order.steps.some((s) => s.operation === operation)) { skipped.push({ row: r + 1, reason: 'Duplicate operation ' + activityId }); continue; }
+      order.steps.push(step);
+    }
+    const built = [...orders.values()].map((order) => {
+      order.steps.sort((a, b) => a.operationNum - b.operationNum || a.operation.localeCompare(b.operation));
+      const dates = [order.lafd, order.basicFinish].filter(Boolean).sort((a, b) => a - b);
+      const due = dates[0] || null;
+      const floc = order.functionalLocation;
+      const unit = assignBeamUnit(order);
+      return {
+        ...order,
+        due, unit,
+        title: order.shortText || order.orderNo,
+        equipmentTag: equipmentTagFromFloc(floc),
+        priority: mapBeamPriority(order.priorityRaw),
+        jobDate: due ? edmontonParts(due).dayKey : '',
+      };
+    });
+    try {
+      localStorage.setItem('bl_beam_map', JSON.stringify({ sig: (matrix[headerRow] || []).map(normBeamHeader).join('|'), map, at: new Date().toISOString() }));
+    } catch { /* ignore */ }
+    return { headerRow, map, remembered, orders: built, skipped, unassigned: built.filter((o) => o.unit === 'Unassigned').length };
+  }
+  function readBeamMatrix(file) {
+    return file.arrayBuffer().then((buf) => {
+      const wb = XLSX.read(buf, { type: 'array', cellDates: true });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      return XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
+    });
+  }
+  async function commitBeamImport(parsed) {
+    const wos = parsed.orders.map((o) => o.orderNo);
+    const existing = [];
+    for (let i = 0; i < wos.length; i += 40) {
+      const { data, error } = await sb.from('jobs').select('*, steps(*)').in('wo_number', wos.slice(i, i + 40));
+      if (error) throw error;
+      existing.push(...(data || []));
+    }
+    const byWo = new Map(existing.map((j) => [j.wo_number, j]));
+    let created = 0;
+    let updated = 0;
+    for (const order of parsed.orders) {
+      const found = byWo.get(order.orderNo);
+      const beam = {
+        ...(found?.beam || {}),
+        planningWeek: order.planningWeek, plantSection: order.plantSection, location: order.location,
+        gsapUnit: order.gsapUnit, leadDiscipline: order.leadDiscipline, orderType: order.orderType,
+        abc: order.abc, userStatus: order.userStatus, priorityRaw: String(order.priorityRaw ?? ''),
+        dueDate: order.due ? order.due.toISOString() : '',
+        source: 'beam',
+        unit_source: found?.beam?.unit_source === 'manual' ? 'manual' : 'auto',
+      };
+      const jobPatch = {
+        title: order.title,
+        description: order.steps.map((s) => s.activityName).filter(Boolean).join(' · '),
+        priority: order.priority,
+        functional_location: order.functionalLocation,
+        equipment_location: order.functionalLocation,
+        equipment_tag: order.equipmentTag,
+        sap_work_order: order.orderNo,
+        job_date: order.jobDate || null,
+        beam, updated_at: new Date().toISOString(),
+      };
+      if (beam.unit_source !== 'manual') jobPatch.unit = order.unit;
+      let jobId = found?.id;
+      if (!found) {
+        const { data, error } = await sb.from('jobs').insert({ ...jobPatch, wo_number: order.orderNo, unit: order.unit, created_by: state.user.name, status: 'not_started' }).select().single();
+        if (error) throw error;
+        jobId = data.id;
+        created++;
+        await audit(jobId, 'job_created', 'Beam import ' + order.orderNo);
+      } else {
+        const { error } = await sb.from('jobs').update(jobPatch).eq('id', found.id);
+        if (error) throw error;
+        updated++;
+        await audit(found.id, 'beam_import', 'Updated from Beam sheet');
+      }
+      const have = new Map((found?.steps || []).map((s) => [String((s.beam || {}).operation || ''), s]).filter(([k]) => k));
+      for (const step of order.steps) {
+        const prev = have.get(step.operation);
+        const stepBeam = {
+          operation: step.operation, activityId: step.activityId, activityName: step.activityName,
+          crew: step.crew, originalDuration: step.originalDuration, remDuration: step.remDuration,
+          earlyStart: step.earlyStart, earlyStartIso: step.earlyStartIso, cranes: step.cranes,
+          workCenter: step.workCenter, leadDiscipline: step.leadDiscipline,
+        };
+        const label = step.activityName || (step.trade + ' — work');
+        if (!prev) {
+          const { data, error } = await sb.from('steps').insert({
+            job_id: jobId, trade: step.trade, label, sort_order: step.operationNum, status: 'pending', beam: stepBeam,
+          }).select().single();
+          if (error) throw error;
+          const people = step.known ? defaultAssignees(step.trade) : [{ person_name: step.crew || (step.trade + ' crew') }];
+          await sb.from('step_assignees').insert(people.map((a) => ({ step_id: data.id, person_id: a.person_id || null, person_name: a.person_name, signed_off: false })));
+        } else {
+          const protectedStep = prev.status === 'skipped' || prev.status === 'done' || prev.status === 'in_progress';
+          const patch = { label, sort_order: step.operationNum, beam: { ...(prev.beam || {}), ...stepBeam } };
+          if (!protectedStep) patch.trade = step.trade;
+          const { error } = await sb.from('steps').update(patch).eq('id', prev.id);
+          if (error) throw error;
+        }
+      }
+      const { data: steps } = await sb.from('steps').select('id,status').eq('job_id', jobId).order('sort_order');
+      if (steps && !steps.some((s) => s.status === 'ready' || s.status === 'in_progress' || s.status === 'done')) {
+        const next = steps.find((s) => s.status === 'pending');
+        if (next) await sb.from('steps').update({ status: 'ready' }).eq('id', next.id);
+      }
+    }
+    return { created, updated };
+  }
+  function openBeamImport() {
+    const root = $('#modal-root');
+    let parsed = null;
+    root.innerHTML = '<div class="overlay"><div class="modal"><div class="modal-head"><strong>Import Beam sheet</strong><button class="btn btn-sm" id="close-beam">Close</button></div><div class="modal-body">' +
+      '<p style="color:var(--muted);margin-top:0">Drop the planning export here, or choose a file. .xlsx, .xls, and .csv. Columns are detected automatically. Re-import updates the same orders and does not touch sign-offs, comments, photos, skips, permit holders, or radio channels.</p>' +
+      '<div class="dropzone" id="beam-drop">Drop the Beam export here, or tap to choose</div>' +
+      '<input id="beam-file" type="file" accept=".xlsx,.xls,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" style="display:none" />' +
+      '<div id="beam-summary"></div></div></div></div>';
+    const drop = $('#beam-drop');
+    const input = $('#beam-file');
+    $('#close-beam').onclick = () => { root.innerHTML = ''; };
+    drop.onclick = () => input.click();
+    drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
+    drop.ondragleave = () => drop.classList.remove('over');
+    drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) take(e.dataTransfer.files[0]); };
+    input.onchange = () => { if (input.files[0]) take(input.files[0]); };
+    async function take(file) {
+      try {
+        const matrix = await readBeamMatrix(file);
+        parsed = parseBeamMatrix(matrix);
+        if (parsed.error) { $('#beam-summary').innerHTML = '<p class="hold-banner">' + esc(parsed.error) + '</p>'; return; }
+        const steps = parsed.orders.reduce((n, o) => n + o.steps.length, 0);
+        $('#beam-summary').innerHTML = '<div class="stats" style="margin-top:14px"><div class="stat"><div class="n">' + parsed.orders.length + '</div><div class="l">Orders</div></div><div class="stat"><div class="n">' + steps + '</div><div class="l">Operations</div></div><div class="stat"><div class="n">' + parsed.unassigned + '</div><div class="l">Unassigned</div></div><div class="stat"><div class="n">' + parsed.skipped.length + '</div><div class="l">Skipped rows</div></div></div>' +
+          '<p style="color:var(--muted)">Priority: 1 Critical, 2 High, 3 or blank Normal, 4–5 Low. Due date is the earlier of LAFD and basic finish. On time is green. Due within 7 days, and overdue, are amber.</p>' +
+          (parsed.remembered ? '<p>Using the column mapping remembered from last time.</p>' : '<p>Column mapping detected from the header row (row ' + (parsed.headerRow + 1) + ').</p>') +
+          (parsed.skipped.length ? '<div class="audit-list">' + parsed.skipped.slice(0, 12).map((s) => '<div class="audit-item">Row ' + s.row + ': ' + esc(s.reason) + '</div>').join('') + '</div>' : '') +
+          '<button class="btn btn-primary btn-block" id="beam-go" style="margin-top:14px">Import</button>';
+        $('#beam-go').onclick = async () => {
+          $('#beam-go').disabled = true;
+          try {
+            const result = await commitBeamImport(parsed);
+            const ds = { ...(state.settings?.data_source || {}), beam_header_map: { map: parsed.map, at: new Date().toISOString() }, adapter: 'excel', label: 'Beam planning export → Supabase', lastUpdated: new Date().toISOString() };
+            await sb.from('app_settings').upsert({ id: 'default', data_source: ds, updated_at: new Date().toISOString() });
+            await loadMeta();
+            toast(result.created + ' new, ' + result.updated + ' updated');
+            await refreshAll(true);
+            root.innerHTML = '';
+            setView('jobs');
+          } catch (err) { $('#beam-go').disabled = false; toast(err.message); }
+        };
+      } catch (err) { toast(err.message); }
+    }
+  }
+
   function openImport() {
     const root = $('#modal-root');
     let preview = null; let mapping = {};
@@ -1361,6 +1766,7 @@
     });
     $('#btn-refresh').onclick = () => refreshAll(true);
     $('#btn-new-job').onclick = () => openJobEditor(null);
+    $('#btn-beam-import').onclick = openBeamImport;
     $('#btn-import').onclick = openImport;
     $('#btn-export').onclick = exportExcel;
     $('#btn-audit-refresh').onclick = renderAudit;
@@ -1386,7 +1792,8 @@
         const units = unitsRaw.length ? unitsRaw : DEFAULT_UNITS.slice();
         const parsedSites = parseSites($('#adm-sites')?.value || '');
         const sites = parsedSites.length ? parsedSites : cloneSites(DEFAULT_SITES);
-        const ds = { ...(state.settings?.data_source || {}), units, sites, adapter: state.settings?.data_source?.adapter || 'supabase', label: state.settings?.data_source?.label || 'Supabase (Beamlock)' };
+        const unitPatterns = parseUnitPatterns($('#adm-unit-map')?.value || '');
+        const ds = { ...(state.settings?.data_source || {}), units, sites, unit_patterns: unitPatterns.length ? unitPatterns : DEFAULT_UNIT_PATTERNS.map((p) => ({ ...p })), adapter: state.settings?.data_source?.adapter || 'supabase', label: state.settings?.data_source?.label || 'Supabase (Beamlock)' };
         await sb.from('app_settings').upsert({
           id: 'default',
           url_templates: {
