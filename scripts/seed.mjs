@@ -127,7 +127,7 @@ async function main() {
   const UNITS = ['RHC', 'A&V', 'SRU', 'COGEN', 'Waterblock', 'HMU'];
   await sb.from('app_settings').upsert({
     id: 'default',
-    url_templates: { sap: '', permitVision: '', powerBi: '', digitalTwin: '', pid: '', utl: '' },
+    url_templates: { sap: '', permitVision: '', powerBi: '', digitalTwin: '', pid: '', piVision: '', utl: '' },
     power_bi_embed: { title: 'Maintenance dashboard', embedUrl: '', lastConfiguredAt: null },
     data_source: {
       adapter: 'supabase', label: 'Supabase (Beamlock)', lastUpdated: new Date().toISOString(), units: UNITS,
@@ -146,6 +146,7 @@ async function main() {
     { id: 'sharepoint', name: 'SharePoint docs', url: '', icon: 'SP', description: 'Procedures & drawings (placeholder)', sort_order: 5 },
     { id: 'serviceDesk', name: 'Service desk', url: '', icon: 'SD', description: 'IT / support ticket (placeholder)', sort_order: 6 },
     { id: 'drawings', name: 'Drawings / DMS', url: '', icon: 'DW', description: 'P&IDs and documents (placeholder)', sort_order: 7 },
+    { id: 'piVision', name: 'PI Vision', url: '', icon: 'PI', description: 'Process displays — link out only', sort_order: 8 },
   ]);
   const rows = [
     { 'Work Order': 'WO-46001', Description: 'Replace ball valve BV-440', Unit: 'RHC', Area: 'Pump alley', Tag: 'BV-440', 'Equipment location': 'Pump alley / EL 12 / Grid A-2', 'P&ID': 'PID-RHC-PA-440', 'Permit holder': 'J. Smith', 'Radio channel': 'Ch 4', Priority: 'High', Date: '2026-11-06', Trades: 'Full valve weld-in', Permit: 'PTW-9001', LOTO: 'LOTO-RHC-501', 'SAP Work Order': 'WO-46001', 'SAP Notification': 'NOT-80001', 'Permit Vision': 'PV-2026-5001', 'Functional Location': 'RHC-PA-BV440' },

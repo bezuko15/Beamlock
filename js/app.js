@@ -592,6 +592,7 @@
     $('#adm-pbi-tpl').value = tpl.powerBi || '';
     if ($('#adm-twin')) $('#adm-twin').value = tpl.digitalTwin || '';
     if ($('#adm-pid')) $('#adm-pid').value = tpl.pid || '';
+    if ($('#adm-pi')) $('#adm-pi').value = tpl.piVision || '';
     if ($('#adm-utl')) $('#adm-utl').value = tpl.utl || '';
     $('#adm-pbi-embed').value = state.settings?.power_bi_embed?.embedUrl || '';
     $('#adm-pbi-title').value = state.settings?.power_bi_embed?.title || 'Maintenance dashboard';
@@ -670,6 +671,10 @@
   }
   function pidLinkUrl(tpl, refs) {
     if (!String(tpl || '').trim() || !String(refs.pidNumber || '').trim()) return '';
+    return templateReady(tpl, refs);
+  }
+  function piVisionUrl(tpl, refs) {
+    if (!String(tpl || '').trim() || !String(refs.equipmentTag || '').trim()) return '';
     return templateReady(tpl, refs);
   }
   function disabledBtn(label) {
@@ -828,13 +833,16 @@
     const tpl = state.settings?.url_templates || {};
     const refs = jobRefs(job);
     const utlHref = externalUrl(tpl.utl);
-    const launchHtml = [
+    const launchParts = [
       launchAnchor('Open in SAP', (tpl.sap && (job.sap_work_order || job.wo_number)) ? templateReady(tpl.sap, refs) : ''),
       launchAnchor('Open in Permit Vision', (tpl.permitVision && job.permit_vision_id) ? templateReady(tpl.permitVision, refs) : ''),
       launchAnchor('Open in Power BI', tpl.powerBi ? templateReady(tpl.powerBi, refs) : ''),
       launchAnchor('Digital twin', digitalTwinUrl(tpl.digitalTwin, refs)),
       launchAnchor('P&ID', pidLinkUrl(tpl.pid, refs)),
-    ].join('');
+    ];
+    const piUrl = piVisionUrl(tpl.piVision, refs);
+    if (piUrl) launchParts.push('<a class="btn btn-sm" href="' + esc(piUrl) + '" target="_blank" rel="noopener noreferrer">Open in PI Vision</a>');
+    const launchHtml = launchParts.join('');
     const utlOpen = utlHref
       ? '<a class="btn btn-sm" href="' + esc(utlHref) + '" target="_blank" rel="noopener noreferrer">Open UTL log</a>'
       : disabledBtn('Open UTL log');
@@ -1388,6 +1396,7 @@
             powerBi: $('#adm-pbi-tpl').value.trim(),
             digitalTwin: ($('#adm-twin')?.value || '').trim(),
             pid: ($('#adm-pid')?.value || '').trim(),
+            piVision: ($('#adm-pi')?.value || '').trim(),
             utl: ($('#adm-utl')?.value || '').trim(),
           },
           power_bi_embed: { embedUrl, title: $('#adm-pbi-title').value.trim(), lastConfiguredAt: new Date().toISOString() },

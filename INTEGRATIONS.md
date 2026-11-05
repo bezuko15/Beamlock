@@ -12,5 +12,15 @@ Sign-offs track **work progress only**. They do **not** issue/approve permits or
 4. **Power BI** — workspace owner, license/embed method, secure embed URL; CSP already allows `app.powerbi.com` + `login.microsoftonline.com`.  
 5. **Hosting** — approved Canadian region if required; HTTPS; turnaround concurrency.  
 6. **Other tiles** — Teams, SharePoint, service desk, drawings/DMS base URLs.
+7. **PI Vision (AVEVA / OSIsoft)** — link-out only. Beamlock does not embed PI Vision and does not pull historian data.
+
+Ask Shell IT for:
+
+- The PI Vision server URL (HTTPS display site)
+- Display naming conventions: how a display maps to an equipment tag or functional location
+- Read access for contractors
+- Whether URL parameters are allowed. The job button builds `{equipmentTag}` and `{functionalLocation}`, both URL-encoded
+
+The Apps tile stays “Not configured yet” until its URL is filled in. “Open in PI Vision” on a job stays hidden until the URL template and that job’s equipment tag are both set.
 
 See also the original TradeTrack notes under `/workspace/tradetrack/INTEGRATIONS.md` for the longer form.
