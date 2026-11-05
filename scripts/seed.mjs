@@ -61,8 +61,8 @@ async function main() {
   if (pe) throw pe;
   const byTrade = (t) => people.filter((p) => p.trade === t);
   const jobsSpec = [
-    { wo_number: 'WO-45210', title: 'Replace 6\" control valve CV-2104', unit: 'RHC', area: 'Reactor deck', equipment_tag: 'CV-2104', priority: 'High', description: 'Replace leaking control valve. Full insulation + EHT strip and reinstate.', job_date: '2026-11-05', permit_number: 'PTW-8891', loto_isolation: 'LOTO-RHC-447', sap_work_order: 'WO-45210', sap_notification: 'NOT-77821', permit_vision_id: 'PV-2026-4412', functional_location: 'RHC-210-CV', template: 'full_valve', progress: 3, comments: [ { channel: 'operators', author_name: 'Sam Okonkwo', author_role: 'Operator', body: 'Isolation verified. Blind list attached at board.' }, { channel: 'trades', author_name: 'Morgan Blake', author_role: 'Insulator', body: 'Insulation removed on east side. West still hot — waiting cool-down.' } ] },
-    { wo_number: 'WO-45218', title: 'Weld repair spool SP-118', unit: 'A&V', area: 'Pipe rack B', equipment_tag: 'SP-118', priority: 'Critical', description: 'Crack repair on process spool. Fitters + NDE only.', job_date: '2026-11-05', permit_number: 'PTW-8902', loto_isolation: 'LOTO-AV-201', sap_work_order: 'WO-45218', sap_notification: 'NOT-77840', permit_vision_id: 'PV-2026-4420', functional_location: 'AV-PRB-SP118', template: 'fitters_nde', progress: 1, comments: [{ channel: 'trades', author_name: 'Chris Alvarez', author_role: 'Pipefitter', body: 'Fit-up complete. Ready for root pass NDE.' }] },
+    { wo_number: 'WO-45210', title: 'Replace 6\" control valve CV-2104', unit: 'RHC', area: 'Reactor deck', equipment_tag: 'CV-2104', equipment_location: 'Reactor deck / EL 42 / Grid C-3', pid_number: 'PID-RHC-210-04', priority: 'High', description: 'Replace leaking control valve. Full insulation + EHT strip and reinstate.', job_date: '2026-11-05', permit_number: 'PTW-8891', loto_isolation: 'LOTO-RHC-447', sap_work_order: 'WO-45210', sap_notification: 'NOT-77821', permit_vision_id: 'PV-2026-4412', functional_location: 'RHC-210-CV', template: 'full_valve', progress: 3, comments: [ { channel: 'operators', author_name: 'Sam Okonkwo', author_role: 'Operator', body: 'Isolation verified. Blind list attached at board.' }, { channel: 'trades', author_name: 'Morgan Blake', author_role: 'Insulator', body: 'Insulation removed on east side. West still hot — waiting cool-down.' } ] },
+    { wo_number: 'WO-45218', title: 'Weld repair spool SP-118', unit: 'A&V', area: 'Pipe rack B', equipment_tag: 'SP-118', equipment_location: 'Pipe rack B / EL 28 / Grid B-7', pid_number: 'PID-AV-PRB-118', priority: 'Critical', description: 'Crack repair on process spool. Fitters + NDE only.', job_date: '2026-11-05', permit_number: 'PTW-8902', loto_isolation: 'LOTO-AV-201', sap_work_order: 'WO-45218', sap_notification: 'NOT-77840', permit_vision_id: 'PV-2026-4420', functional_location: 'AV-PRB-SP118', template: 'fitters_nde', progress: 1, comments: [{ channel: 'trades', author_name: 'Chris Alvarez', author_role: 'Pipefitter', body: 'Fit-up complete. Ready for root pass NDE.' }] },
     { wo_number: 'WO-45190', title: 'Reinsulate steam header SH-40', unit: 'SRU', area: 'Claus train', equipment_tag: 'SH-40', priority: 'Normal', description: 'Damaged cladding after storm.', job_date: '2026-11-04', permit_number: 'PTW-8810', sap_work_order: 'WO-45190', sap_notification: 'NOT-77600', functional_location: 'SRU-CL-SH40', template: 'insulation_elec', progress: 0 },
     { wo_number: 'WO-45201', title: 'Install new drain valve DV-55', unit: 'COGEN', area: 'HRSG deck', equipment_tag: 'DV-55', priority: 'Normal', description: 'New low-point drain. Full sequence.', job_date: '2026-11-05', permit_number: 'PTW-8880', loto_isolation: 'LOTO-CGN-455', sap_work_order: 'WO-45201', sap_notification: 'NOT-77755', permit_vision_id: 'PV-2026-4390', functional_location: 'CGN-HRSG-DV55', template: 'full_valve', progress: 0, hold: 'Waiting on scaffold completion — scaffold ticket SCF-332' },
     { wo_number: 'WO-45175', title: 'EHT repair on line 8\"-P-220', unit: 'Waterblock', area: 'Cooling water', equipment_tag: '8\"-P-220', priority: 'High', description: 'Heat trace circuit open. Electrical only.', job_date: '2026-11-05', permit_number: 'PTW-8875', sap_work_order: 'WO-45175', template: 'elec_only', progress: 0 },
@@ -81,6 +81,7 @@ async function main() {
       job_date: spec.job_date, permit_number: spec.permit_number || '', loto_isolation: spec.loto_isolation || '',
       sap_work_order: spec.sap_work_order || spec.wo_number, sap_notification: spec.sap_notification || '',
       permit_vision_id: spec.permit_vision_id || '', functional_location: spec.functional_location || '',
+      pid_number: spec.pid_number || '', equipment_location: spec.equipment_location || '',
       created_by: 'Alex Rivera', status: 'not_started',
     }).select().single();
     if (error) throw error;
@@ -119,9 +120,15 @@ async function main() {
   const UNITS = ['RHC', 'A&V', 'SRU', 'COGEN', 'Waterblock', 'HMU'];
   await sb.from('app_settings').upsert({
     id: 'default',
-    url_templates: { sap: '', permitVision: '', powerBi: '' },
+    url_templates: { sap: '', permitVision: '', powerBi: '', digitalTwin: '', pid: '', utl: '' },
     power_bi_embed: { title: 'Maintenance dashboard', embedUrl: '', lastConfiguredAt: null },
-    data_source: { adapter: 'supabase', label: 'Supabase (Beamlock)', lastUpdated: new Date().toISOString(), units: UNITS },
+    data_source: {
+      adapter: 'supabase', label: 'Supabase (Beamlock)', lastUpdated: new Date().toISOString(), units: UNITS,
+      sites: [{ name: 'Upgrader South', processUnits: [
+        { name: 'PU1', units: ['HMU', 'RHC'] },
+        { name: 'PU2', units: ['A&V', 'SRU', 'COGEN', 'Waterblock'] },
+      ] }],
+    },
     updated_at: new Date().toISOString(),
   });
   await sb.from('app_tiles').upsert([
@@ -134,8 +141,8 @@ async function main() {
     { id: 'drawings', name: 'Drawings / DMS', url: '', icon: 'DW', description: 'P&IDs and documents (placeholder)', sort_order: 7 },
   ]);
   const rows = [
-    { 'Work Order': 'WO-46001', Description: 'Replace ball valve BV-440', Unit: 'RHC', Area: 'Pump alley', Tag: 'BV-440', Priority: 'High', Date: '2026-11-06', Trades: 'Full valve weld-in', Permit: 'PTW-9001', LOTO: 'LOTO-RHC-501', 'SAP Work Order': 'WO-46001', 'SAP Notification': 'NOT-80001', 'Permit Vision': 'PV-2026-5001', 'Functional Location': 'RHC-PA-BV440' },
-    { 'Work Order': 'WO-46002', Description: 'Weld repair on elbow EL-12', Unit: 'A and V', Area: 'Pipe rack A', Tag: 'EL-12', Priority: 'Critical', Date: '2026-11-06', Trades: 'Fitters + NDE', Permit: 'PTW-9002', LOTO: 'LOTO-AV-220', 'SAP Work Order': 'WO-46002', 'SAP Notification': 'NOT-80002', 'Permit Vision': 'PV-2026-5002', 'Functional Location': 'AV-PRA-EL12' },
+    { 'Work Order': 'WO-46001', Description: 'Replace ball valve BV-440', Unit: 'RHC', Area: 'Pump alley', Tag: 'BV-440', 'Equipment location': 'Pump alley / EL 12 / Grid A-2', 'P&ID': 'PID-RHC-PA-440', Priority: 'High', Date: '2026-11-06', Trades: 'Full valve weld-in', Permit: 'PTW-9001', LOTO: 'LOTO-RHC-501', 'SAP Work Order': 'WO-46001', 'SAP Notification': 'NOT-80001', 'Permit Vision': 'PV-2026-5001', 'Functional Location': 'RHC-PA-BV440' },
+    { 'Work Order': 'WO-46002', Description: 'Weld repair on elbow EL-12', Unit: 'A and V', Area: 'Pipe rack A', Tag: 'EL-12', 'Equipment location': 'Pipe rack A / EL 30 / Grid D-1', 'P&ID': 'PID-AV-PRA-12', Priority: 'Critical', Date: '2026-11-06', Trades: 'Fitters + NDE', Permit: 'PTW-9002', LOTO: 'LOTO-AV-220', 'SAP Work Order': 'WO-46002', 'SAP Notification': 'NOT-80002', 'Permit Vision': 'PV-2026-5002', 'Functional Location': 'AV-PRA-EL12' },
     { 'Work Order': 'WO-46003', Description: 'Reinsulate exchanger shell', Unit: 'SRU', Area: 'Claus train', Tag: 'E-SR-3', Priority: 'Normal', Date: '2026-11-07', Trades: 'Insulation + Electrical', 'SAP Work Order': 'WO-46003', 'Functional Location': 'SRU-CL-ESR3' },
     { 'Work Order': 'WO-46004', Description: 'Heat trace repair circuit 14', Unit: 'Cogen', Area: 'HRSG', Tag: 'HT-14', Priority: 'High', Date: '2026-11-06', Trades: 'Electrical only', Permit: 'PTW-9004', 'SAP Work Order': 'WO-46004' },
     { 'Work Order': 'WO-46005', Description: 'Install new gauge GG-88', Unit: 'Waterblock', Area: 'Filter gallery', Tag: 'GG-88', Priority: 'Low', Date: '2026-11-08', Trades: 'Fitters only', LOTO: 'LOTO-WB-510', 'SAP Work Order': 'WO-46005' },

@@ -38,6 +38,12 @@
   };
   const TRADE_SHORT = { Insulator: 'INS', Electrician: 'EL', Pipefitter: 'FIT', NDE: 'NDE' };
   const DEFAULT_UNITS = ['RHC', 'A&V', 'SRU', 'COGEN', 'Waterblock', 'HMU'];
+  const DEFAULT_SITES = [
+    { name: 'Upgrader South', processUnits: [
+      { name: 'PU1', units: ['HMU', 'RHC'] },
+      { name: 'PU2', units: ['A&V', 'SRU', 'COGEN', 'Waterblock'] },
+    ] },
+  ];
   const UNIT_ALIASES = {
     rhc: 'RHC', sru: 'SRU', cogen: 'COGEN', cogeneration: 'COGEN',
     hmu: 'HMU', waterblock: 'Waterblock', water: 'Waterblock',
@@ -76,9 +82,101 @@
     }
     return s;
   }
-  function unitCounts(jobs) {
-    const units = getUnits();
-    const counts = Object.fromEntries(units.map((u) => [u, 0]));
+  function cloneSites(sites) {
+    return (sites || []).map((s) => ({
+      name: s.name,
+      processUnits: (s.processUnits || []).map((p) => ({ name: p.name, units: (p.units || []).slice() })),
+    }));
+  }
+  function getSites() {
+    const raw = state.settings?.data_source?.sites;
+    if (Array.isArray(raw) && raw.length && raw.some((s) => s && s.name && (s.processUnits || []).length)) return cloneSites(raw);
+    return cloneSites(DEFAULT_SITES);
+  }
+  function parseSites(text) {
+    const sites = [];
+    let current = null;
+    for (const line of String(text || '').split(/\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const m = trimmed.match(/^([^:]+):\s*(.*)$/);
+      if (m) {
+        if (!current) { current = { name: 'Site', processUnits: [] }; sites.push(current); }
+        current.processUnits.push({ name: m[1].trim(), units: m[2].split(/[,;]/).map((s) => s.trim()).filter(Boolean) });
+      } else {
+        current = { name: trimmed, processUnits: [] };
+        sites.push(current);
+      }
+    }
+    return sites.filter((s) => s.name && s.processUnits.length);
+  }
+  function formatSites(sites) {
+    return cloneSites(sites).map((s) => s.name + '\n' + s.processUnits.map((p) => p.name + ': ' + p.units.join(', ')).join('\n')).join('\n');
+  }
+  function puForUnit(raw) {
+    const unit = normalizeUnit(raw);
+    for (const site of getSites()) {
+      for (const pu of site.processUnits) {
+        if (pu.units.some((u) => (normalizeUnit(u) || u) === unit || unitKey(u) === unitKey(unit))) {
+          return { site: site.name, pu: pu.name, unit };
+        }
+      }
+    }
+    return { site: '', pu: '', unit };
+  }
+  function unitsForPu(puName) {
+    if (!puName) return getUnits();
+    for (const site of getSites()) {
+      const pu = site.processUnits.find((p) => p.name === puName);
+      if (pu) return pu.units.map((u) => normalizeUnit(u) || u);
+    }
+    return getUnits();
+  }
+  function puTabsHtml(selected, jobs, idPrefix) {
+    const sel = selected || '';
+    const counts = {};
+    for (const j of jobs) {
+      const info = puForUnit(j.unit);
+      if (info.pu) counts[info.pu] = (counts[info.pu] || 0) + 1;
+    }
+    let html = '<button type="button" class="pu-chip' + (!sel ? ' on' : '') + '" data-pu="" data-pu-tab="' + idPrefix + '">All<span class="count">' + jobs.length + '</span></button>';
+    for (const site of getSites()) {
+      html += '<span class="pu-site">' + esc(site.name) + '</span>';
+      for (const pu of site.processUnits) {
+        html += '<button type="button" class="pu-chip' + (sel === pu.name ? ' on' : '') + '" data-pu="' + esc(pu.name) + '" data-pu-tab="' + idPrefix + '">' + esc(pu.name) + '<span class="count">' + (counts[pu.name] || 0) + '</span></button>';
+      }
+    }
+    return html;
+  }
+  function groupedSectionsHtml(jobs, gridClass) {
+    const used = new Set();
+    let html = '';
+    const grid = 'job-grid' + (gridClass ? ' ' + gridClass : '');
+    for (const site of getSites()) {
+      for (const pu of site.processUnits) {
+        const blocks = [];
+        let n = 0;
+        for (const unitName of pu.units) {
+          const canon = normalizeUnit(unitName) || unitName;
+          const group = jobs.filter((j) => normalizeUnit(j.unit) === canon);
+          if (!group.length) continue;
+          group.forEach((j) => used.add(j.id));
+          n += group.length;
+          blocks.push('<div class="unit-section"><div class="unit-section-head"><span>' + esc(canon) + '</span><span class="count">' + group.length + '</span></div><div class="' + grid + '">' + group.map(jobCard).join('') + '</div></div>');
+        }
+        if (!n) continue;
+        html += '<section class="pu-section"><div class="pu-section-head"><span>' + esc(site.name) + ' · ' + esc(pu.name) + '</span><span class="count">' + n + '</span></div>' + blocks.join('') + '</section>';
+      }
+    }
+    const other = jobs.filter((j) => !used.has(j.id));
+    if (other.length) {
+      html += '<section class="pu-section"><div class="pu-section-head"><span>Other / unassigned</span><span class="count">' + other.length + '</span></div><div class="' + grid + '">' + other.map(jobCard).join('') + '</div></section>';
+    }
+    return html;
+  }
+  function unitCounts(jobs, units) {
+    const list = units || getUnits();
+    const counts = Object.fromEntries(list.map((u) => [u, 0]));
     let other = 0;
     for (const j of jobs) {
       const u = normalizeUnit(j.unit) || j.unit || '';
@@ -87,9 +185,9 @@
     }
     return { counts, other, total: jobs.length };
   }
-  function unitTabsHtml(selected, jobs, idPrefix) {
-    const { counts, total } = unitCounts(jobs);
-    const units = getUnits();
+  function unitTabsHtml(selected, jobs, idPrefix, unitsOverride) {
+    const units = unitsOverride || getUnits();
+    const { counts, total } = unitCounts(jobs, units);
     const sel = selected || '';
     let html = '<button type="button" class="unit-chip' + (!sel ? ' on' : '') + '" data-unit="" data-unit-tab="' + idPrefix + '">All<span class="count">' + total + '</span></button>';
     for (const u of units) {
@@ -100,7 +198,7 @@
 
   const state = {
     user: null, people: [], jobs: [], settings: null, tiles: [], view: 'jobs',
-    filters: { q: '', status: '', priority: '', trade: '', unit: '' }, boardUnit: '', channels: {},
+    filters: { q: '', status: '', priority: '', trade: '', unit: '', pu: '' }, boardUnit: '', boardPu: '', channels: {},
   };
 
   function esc(s) {
@@ -184,6 +282,9 @@
     if (!state.settings.data_source) state.settings.data_source = {};
     if (!Array.isArray(state.settings.data_source.units) || !state.settings.data_source.units.length) {
       state.settings.data_source.units = DEFAULT_UNITS.slice();
+    }
+    if (!Array.isArray(state.settings.data_source.sites) || !state.settings.data_source.sites.length) {
+      state.settings.data_source.sites = cloneSites(DEFAULT_SITES);
     }
     state.tiles = tiles || [];
   }
@@ -295,15 +396,19 @@
 
   function filteredJobs() {
     let list = state.jobs.slice();
-    const { q, status, priority, trade, unit } = state.filters;
+    const { q, status, priority, trade, unit, pu } = state.filters;
     if (q) {
       const qq = q.toLowerCase();
-      list = list.filter((j) => [j.wo_number, j.title, j.equipment_tag, j.unit, j.area, j.description, j.sap_work_order, j.sap_notification, j.permit_vision_id, j.functional_location].join(' ').toLowerCase().includes(qq));
+      list = list.filter((j) => {
+        const place = puForUnit(j.unit);
+        return [j.wo_number, j.title, j.equipment_tag, j.unit, j.area, j.description, j.sap_work_order, j.sap_notification, j.permit_vision_id, j.functional_location, j.pid_number, j.equipment_location, place.pu, place.site].join(' ').toLowerCase().includes(qq);
+      });
     }
     if (status === 'on_hold') list = list.filter((j) => j.on_hold);
     else if (status) list = list.filter((j) => j.status === status && !j.on_hold);
     if (priority) list = list.filter((j) => j.priority === priority);
     if (trade) list = list.filter((j) => j.steps.some((s) => s.trade === trade));
+    if (pu) list = list.filter((j) => puForUnit(j.unit).pu === pu);
     if (unit) list = list.filter((j) => normalizeUnit(j.unit) === unit);
     return list;
   }
@@ -311,14 +416,19 @@
   function jobCard(job) {
     const wait = waitingTrade(job);
     const mine = isMyTurn(job);
+    const place = puForUnit(job.unit);
     const steps = job.steps.map((s) => '<span class="step-pip ' + s.status + '" title="' + esc(s.label) + '">' + (TRADE_SHORT[s.trade] || s.trade.slice(0, 2)) + '</span>').join('');
-    return '<article class="job-card priority-' + esc(job.priority) + (job.on_hold ? ' on-hold' : '') + (mine ? ' your-turn' : '') + '" data-id="' + job.id + '">' +
+    return '<article class="job-card priority-' + esc(job.priority) + (job.on_hold ? ' on-hold' : '') + (mine ? ' your-turn' : '') + '" data-id="' + job.id + '" data-pu="' + esc(place.pu) + '" data-site="' + esc(place.site) + '">' +
       '<div class="job-top"><div class="wo">' + esc(job.wo_number) + '</div><div class="chip ' + (job.on_hold ? 'bad' : job.status === 'done' ? 'ok' : 'hot') + '">' + (job.on_hold ? 'ON HOLD' : esc(String(job.status).replace('_', ' '))) + '</div></div>' +
       '<div class="title">' + esc(job.title) + '</div><div class="meta">' +
-      '<span class="chip">' + esc(job.unit || '—') + '</span><span class="chip">' + esc(job.equipment_tag || 'no tag') + '</span>' +
+      '<span class="chip">' + esc(job.unit || '—') + '</span>' +
+      (place.pu ? '<span class="chip pu">' + esc(place.pu) + '</span>' : '') +
+      '<span class="chip">' + esc(job.equipment_tag || 'no tag') + '</span>' +
       (job.functional_location ? '<span class="chip">FL: ' + esc(job.functional_location) + '</span>' : '') +
       (job.sap_notification ? '<span class="chip">Notif: ' + esc(job.sap_notification) + '</span>' : '') +
       (job.permit_vision_id ? '<span class="chip">PV: ' + esc(job.permit_vision_id) + '</span>' : '') +
+      (job.pid_number ? '<span class="chip">P&ID: ' + esc(job.pid_number) + '</span>' : '') +
+      (job.equipment_location ? '<span class="chip">Loc: ' + esc(job.equipment_location) + '</span>' : '') +
       '<span class="chip">' + esc(job.priority) + '</span>' +
       (wait ? '<span class="chip hot">Waiting: ' + esc(wait.trade) + '</span>' : '') +
       (mine ? '<span class="chip hot">YOUR TURN</span>' : '') +
@@ -340,18 +450,36 @@
     const sel = $('#filter-unit');
     if (!sel) return;
     const cur = state.filters.unit || '';
-    const units = getUnits();
-    sel.innerHTML = '<option value="">All units</option>' + units.map((u) => '<option value="' + esc(u) + '"' + (cur === u ? ' selected' : '') + '>' + esc(u) + '</option>').join('');
+    const seen = new Set();
+    let html = '<option value="">All units</option>';
+    for (const site of getSites()) {
+      for (const pu of site.processUnits) {
+        const opts = pu.units.map((u) => {
+          const name = normalizeUnit(u) || u;
+          seen.add(name);
+          return '<option value="' + esc(name) + '"' + (cur === name ? ' selected' : '') + '>' + esc(name) + '</option>';
+        }).join('');
+        html += '<optgroup label="' + esc(site.name + ' · ' + pu.name) + '">' + opts + '</optgroup>';
+      }
+    }
+    const rest = getUnits().filter((u) => !seen.has(u));
+    if (rest.length) html += '<optgroup label="Other">' + rest.map((u) => '<option value="' + esc(u) + '"' + (cur === u ? ' selected' : '') + '>' + esc(u) + '</option>').join('') + '</optgroup>';
+    sel.innerHTML = html;
   }
   function renderUnitTabs() {
     const el = $('#unit-tabs');
-    if (!el) return;
-    // counts from unfiltered-by-unit jobs (still apply other filters except unit)
-    const saved = state.filters.unit;
+    const puEl = $('#pu-tabs');
+    const savedUnit = state.filters.unit;
+    const savedPu = state.filters.pu;
     state.filters.unit = '';
-    const base = filteredJobs();
-    state.filters.unit = saved;
-    el.innerHTML = unitTabsHtml(saved, base, 'jobs');
+    state.filters.pu = '';
+    const forPu = filteredJobs();
+    state.filters.pu = savedPu;
+    const forUnits = filteredJobs();
+    state.filters.unit = savedUnit;
+    state.filters.pu = savedPu;
+    if (puEl) puEl.innerHTML = puTabsHtml(savedPu, forPu, 'jobs');
+    if (el) el.innerHTML = unitTabsHtml(savedUnit, forUnits, 'jobs', unitsForPu(savedPu));
   }
   function renderJobList() {
     renderUnitTabs();
@@ -363,25 +491,7 @@
       host.innerHTML = list.map(jobCard).join('');
       return;
     }
-    // Grouped by unit when All is selected
-    const units = getUnits();
-    const groups = Object.fromEntries(units.map((u) => [u, []]));
-    const other = [];
-    for (const j of list) {
-      const u = normalizeUnit(j.unit);
-      if (u && groups[u]) groups[u].push(j);
-      else other.push(j);
-    }
-    let html = '';
-    for (const u of units) {
-      const jobs = groups[u];
-      if (!jobs.length) continue;
-      html += '<div class="unit-section"><div class="unit-section-head"><span>' + esc(u) + '</span><span class="count">' + jobs.length + '</span></div><div class="job-grid">' + jobs.map(jobCard).join('') + '</div></div>';
-    }
-    if (other.length) {
-      html += '<div class="unit-section"><div class="unit-section-head"><span>Other / unassigned</span><span class="count">' + other.length + '</span></div><div class="job-grid">' + other.map(jobCard).join('') + '</div></div>';
-    }
-    host.innerHTML = html || '<div class="empty">No jobs match.</div>';
+    host.innerHTML = groupedSectionsHtml(list, '') || '<div class="empty">No jobs match.</div>';
   }
   function renderMine() {
     const list = state.jobs.filter(isMyTurn);
@@ -389,11 +499,15 @@
     $('#mine-list').innerHTML = list.length ? list.map(jobCard).join('') : '<div class="empty">' + (state.user?.trade ? 'Nothing waiting on ' + esc(state.user.trade) + '.' : 'Sign in as a trade role.') + '</div>';
   }
   function renderBoard() {
+    const puFilter = state.boardPu || '';
     const unitFilter = state.boardUnit || '';
     let jobs = state.jobs.slice();
-    if (unitFilter) jobs = jobs.filter((j) => normalizeUnit(j.unit) === unitFilter);
+    const puTabs = $('#board-pu-tabs');
+    if (puTabs) puTabs.innerHTML = puTabsHtml(puFilter, jobs, 'board');
+    if (puFilter) jobs = jobs.filter((j) => puForUnit(j.unit).pu === puFilter);
     const tabs = $('#board-unit-tabs');
-    if (tabs) tabs.innerHTML = unitTabsHtml(unitFilter, state.jobs, 'board');
+    if (tabs) tabs.innerHTML = unitTabsHtml(unitFilter, jobs, 'board', unitsForPu(puFilter));
+    if (unitFilter) jobs = jobs.filter((j) => normalizeUnit(j.unit) === unitFilter);
     // stats for filtered set
     const byTradeWaiting = { Insulator: 0, Electrician: 0, Pipefitter: 0, NDE: 0 };
     let notStarted = 0, inProgress = 0, done = 0, onHold = 0;
@@ -417,24 +531,7 @@
       host.innerHTML = '<div class="job-grid board">' + jobs.map(jobCard).join('') + '</div>';
       return;
     }
-    const units = getUnits();
-    const groups = Object.fromEntries(units.map((u) => [u, []]));
-    const other = [];
-    for (const j of jobs) {
-      const u = normalizeUnit(j.unit);
-      if (u && groups[u]) groups[u].push(j);
-      else other.push(j);
-    }
-    let html = '';
-    for (const u of units) {
-      const g = groups[u];
-      if (!g.length) continue;
-      html += '<div class="unit-section"><div class="unit-section-head"><span>' + esc(u) + '</span><span class="count">' + g.length + '</span></div><div class="job-grid board">' + g.map(jobCard).join('') + '</div></div>';
-    }
-    if (other.length) {
-      html += '<div class="unit-section"><div class="unit-section-head"><span>Other / unassigned</span><span class="count">' + other.length + '</span></div><div class="job-grid board">' + other.map(jobCard).join('') + '</div></div>';
-    }
-    host.innerHTML = html;
+    host.innerHTML = groupedSectionsHtml(jobs, 'board') || '<div class="empty">No jobs on board.</div>';
   }
   function renderPlanner() { $('#planner-list').innerHTML = state.jobs.map(jobCard).join('') || '<div class="empty">No jobs yet.</div>'; }
   async function renderAudit() {
@@ -454,26 +551,43 @@
   }
   function renderApps() {
     $('#app-tiles').innerHTML = state.tiles.map((t) => {
-      if (t.url) return '<a class="app-tile" href="' + esc(t.url) + '" target="_blank" rel="noopener noreferrer"><div class="ico">' + esc(t.icon || '·') + '</div><div class="name">' + esc(t.name) + '</div><div class="desc">' + esc(t.description || '') + '</div></a>';
-      return '<div class="app-tile disabled"><div class="ico">' + esc(t.icon || '·') + '</div><div class="name">' + esc(t.name) + '</div><div class="desc">' + esc(t.description || 'Placeholder') + '</div></div>';
+      const url = externalUrl(t.url);
+      const body = '<div class="ico">' + esc(t.icon || '·') + '</div><div class="name">' + esc(t.name) + '</div><div class="desc">' + esc(t.description || '') + '</div>';
+      if (url) return '<a class="app-tile" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + body + '</a>';
+      return '<div class="app-tile disabled" aria-disabled="true">' + body + '<div class="not-configured">Not configured yet</div></div>';
     }).join('') || '<div class="empty">No tiles.</div>';
   }
   function renderDashboards() {
     const pbi = state.settings?.power_bi_embed || {};
     $('#pbi-title').textContent = pbi.title || 'Power BI';
     const open = $('#pbi-open');
-    if (pbi.embedUrl) { open.href = pbi.embedUrl; open.style.display = ''; $('#pbi-frame-wrap').innerHTML = '<iframe title="' + esc(pbi.title || 'Power BI') + '" src="' + esc(pbi.embedUrl) + '" allowfullscreen></iframe>'; }
-    else { open.style.display = 'none'; $('#pbi-frame-wrap').innerHTML = '<div class="empty">No Power BI embed configured yet.</div>'; }
+    const embed = externalUrl(pbi.embedUrl);
+    if (embed) {
+      open.href = embed;
+      open.hidden = false;
+      open.style.display = '';
+      $('#pbi-frame-wrap').innerHTML = '<iframe title="' + esc(pbi.title || 'Power BI') + '" src="' + esc(embed) + '" allowfullscreen></iframe>';
+    } else {
+      open.removeAttribute('href');
+      open.hidden = true;
+      open.style.display = 'none';
+      $('#pbi-frame-wrap').innerHTML = '<div class="empty">No Power BI embed configured yet.</div>';
+    }
   }
   function renderAdmin() {
     const tpl = state.settings?.url_templates || {};
     $('#adm-sap').value = tpl.sap || '';
     $('#adm-pv').value = tpl.permitVision || '';
     $('#adm-pbi-tpl').value = tpl.powerBi || '';
+    if ($('#adm-twin')) $('#adm-twin').value = tpl.digitalTwin || '';
+    if ($('#adm-pid')) $('#adm-pid').value = tpl.pid || '';
+    if ($('#adm-utl')) $('#adm-utl').value = tpl.utl || '';
     $('#adm-pbi-embed').value = state.settings?.power_bi_embed?.embedUrl || '';
     $('#adm-pbi-title').value = state.settings?.power_bi_embed?.title || 'Maintenance dashboard';
     const unitsEl = $('#adm-units');
     if (unitsEl) unitsEl.value = getUnits().join('\n');
+    const sitesEl = $('#adm-sites');
+    if (sitesEl) sitesEl.value = formatSites(getSites());
     $('#adm-tiles').innerHTML = state.tiles.map((t, i) =>
       '<div class="tile-edit" data-i="' + i + '"><input class="input" data-k="icon" value="' + esc(t.icon || '') + '" /><input class="input" data-k="name" value="' + esc(t.name || '') + '" /><input class="input" data-k="url" value="' + esc(t.url || '') + '" placeholder="https://…" /><input class="input" data-k="description" value="' + esc(t.description || '') + '" style="grid-column:1/-1" /></div>'
     ).join('');
@@ -495,14 +609,145 @@
     renderAll();
   }
 
+  function externalUrl(raw) {
+    const s = String(raw || '').trim();
+    return /^https?:\/\//i.test(s) ? s : '';
+  }
   function fillTemplate(tpl, refs) {
     if (!tpl) return '';
-    return tpl.replaceAll('{workOrder}', encodeURIComponent(refs.workOrder || ''))
+    return String(tpl).replaceAll('{workOrder}', encodeURIComponent(refs.workOrder || ''))
       .replaceAll('{sapNotification}', encodeURIComponent(refs.sapNotification || ''))
       .replaceAll('{permitVision}', encodeURIComponent(refs.permitVision || ''))
       .replaceAll('{equipmentTag}', encodeURIComponent(refs.equipmentTag || ''))
       .replaceAll('{functionalLocation}', encodeURIComponent(refs.functionalLocation || ''))
+      .replaceAll('{unit}', encodeURIComponent(refs.unit || ''))
+      .replaceAll('{pidNumber}', encodeURIComponent(refs.pidNumber || ''))
       .replaceAll('{wo}', encodeURIComponent(refs.workOrder || ''));
+  }
+  function jobRefs(job) {
+    return {
+      workOrder: job.sap_work_order || job.wo_number || '',
+      sapNotification: job.sap_notification || '',
+      permitVision: job.permit_vision_id || '',
+      equipmentTag: job.equipment_tag || '',
+      functionalLocation: job.functional_location || '',
+      unit: job.unit || '',
+      pidNumber: job.pid_number || '',
+    };
+  }
+  function templateReady(tpl, refs) {
+    const raw = String(tpl || '').trim();
+    if (!raw) return '';
+    const tokenKey = {
+      workOrder: 'workOrder', wo: 'workOrder', sapNotification: 'sapNotification', permitVision: 'permitVision',
+      equipmentTag: 'equipmentTag', functionalLocation: 'functionalLocation', unit: 'unit', pidNumber: 'pidNumber',
+    };
+    const re = /\{(\w+)\}/g;
+    let m;
+    while ((m = re.exec(raw))) {
+      const key = tokenKey[m[1]];
+      if (key && !String(refs[key] || '').trim()) return '';
+    }
+    return externalUrl(fillTemplate(raw, refs));
+  }
+  function digitalTwinUrl(tpl, refs) {
+    const raw = String(tpl || '');
+    if (!raw.trim()) return '';
+    const mentionsAsset = /\{(equipmentTag|functionalLocation)\}/.test(raw);
+    if (!mentionsAsset && !String(refs.equipmentTag || '').trim() && !String(refs.functionalLocation || '').trim()) return '';
+    return templateReady(raw, refs);
+  }
+  function pidLinkUrl(tpl, refs) {
+    if (!String(tpl || '').trim() || !String(refs.pidNumber || '').trim()) return '';
+    return templateReady(tpl, refs);
+  }
+  function disabledBtn(label) {
+    return '<button type="button" class="btn btn-sm" disabled>' + esc(label) + ' — not configured yet</button>';
+  }
+  function launchAnchor(label, url) {
+    if (!url) return disabledBtn(label);
+    return '<a class="btn btn-sm" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + esc(label) + '</a>';
+  }
+  const EDMONTON = 'America/Edmonton';
+  function edmontonParts(input) {
+    const d = input ? new Date(input) : new Date();
+    if (Number.isNaN(d.getTime())) return null;
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: EDMONTON, year: 'numeric', month: 'short', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
+    }).formatToParts(d);
+    const g = (t) => parts.find((p) => p.type === t)?.value || '';
+    return {
+      stamp: g('day') + ' ' + g('month') + ' ' + g('year') + ' ' + g('hour') + ':' + g('minute') + ' ' + g('timeZoneName'),
+      dayKey: new Intl.DateTimeFormat('en-CA', { timeZone: EDMONTON, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d),
+    };
+  }
+  function fmtEdmonton(iso) { return edmontonParts(iso)?.stamp || ''; }
+  function statusLabel(job) {
+    if (job.on_hold || job.status === 'on_hold') return 'On hold';
+    return ({ not_started: 'Not started', in_progress: 'In progress', done: 'Done' })[job.status] || String(job.status || '—').replaceAll('_', ' ');
+  }
+  function buildUtlLog(job, opts) {
+    const notesMode = opts?.notes || 'all';
+    const only = opts?.onlyComment || null;
+    const now = edmontonParts();
+    const wait = waitingTrade(job);
+    const place = puForUnit(job.unit);
+    const lines = [now.stamp];
+    if (place.site || place.pu) lines.push('Process unit: ' + [place.site, place.pu].filter(Boolean).join(' · '));
+    lines.push('Unit: ' + (job.unit || '—'));
+    lines.push('WO #: ' + (job.wo_number || '—'));
+    lines.push('SAP notification #: ' + (job.sap_notification || '—'));
+    lines.push('Equipment tag: ' + (job.equipment_tag || '—'));
+    if (job.equipment_location) lines.push('Equipment location: ' + job.equipment_location);
+    if (job.pid_number) lines.push('P&ID / drawing #: ' + job.pid_number);
+    lines.push('Job title: ' + (job.title || '—'));
+    lines.push('Status: ' + statusLabel(job));
+    lines.push('Waiting on: ' + (wait ? (wait.label + ' (' + wait.trade + ')') : (job.status === 'done' && !job.on_hold ? 'Complete — nothing waiting' : '—')));
+    lines.push('', 'Sign-offs:');
+    const signoffs = [];
+    (job.steps || []).forEach((s) => {
+      (s.assignees || []).filter((a) => a.signed_off).forEach((a) => {
+        signoffs.push('- ' + s.trade + ' — ' + (a.person_name || '—') + ' — ' + (a.signed_at ? fmtEdmonton(a.signed_at) : '—'));
+      });
+    });
+    lines.push(signoffs.length ? signoffs.join('\n') : '- none yet');
+    lines.push('', 'Holds:');
+    if (job.on_hold || job.hold_reason) {
+      lines.push('- ' + (job.hold_reason || 'On hold') + (job.hold_by ? ' — ' + job.hold_by : '') + (job.hold_at ? ' — ' + fmtEdmonton(job.hold_at) : ''));
+    } else lines.push('- none');
+    let comments = (job.comments || []).slice();
+    if (only) comments = [only];
+    else if (notesMode === 'today') comments = comments.filter((c) => edmontonParts(c.created_at)?.dayKey === now.dayKey);
+    comments.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+    lines.push('', only ? 'Note:' : (notesMode === 'today' ? "Today's notes:" : 'Notes:'));
+    if (!comments.length) lines.push('- ' + (notesMode === 'today' && !only ? 'none today' : 'none'));
+    else comments.forEach((c) => lines.push('- ' + fmtEdmonton(c.created_at) + ' — ' + (c.author_name || '—') + ' — ' + (c.author_role || '—') + ' — ' + (c.body || '')));
+    return lines.join('\n');
+  }
+  async function copyText(text) {
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        await navigator.clipboard.writeText(text);
+        toast('Copied');
+        return;
+      }
+    } catch { /* selectable fallback for iOS and older browsers */ }
+    showCopyFallback(text);
+  }
+  function showCopyFallback(text) {
+    document.getElementById('copy-fallback')?.remove();
+    const wrap = document.createElement('div');
+    wrap.id = 'copy-fallback';
+    wrap.className = 'overlay copy-fallback';
+    wrap.innerHTML = '<div class="modal" role="dialog" aria-label="Copy to UTL log"><div class="modal-head"><strong>Copy to UTL log</strong><button class="btn btn-sm" type="button" id="copy-fallback-close">Close</button></div><div class="modal-body"><p style="color:var(--muted);margin-top:0">Clipboard is not available in this browser. Select the text below and copy it.</p><textarea class="textarea" id="copy-fallback-text" readonly></textarea></div></div>';
+    document.body.appendChild(wrap);
+    const ta = wrap.querySelector('#copy-fallback-text');
+    ta.value = text;
+    const close = () => wrap.remove();
+    wrap.querySelector('#copy-fallback-close').onclick = close;
+    wrap.addEventListener('click', (e) => { if (e.target === wrap) close(); });
+    setTimeout(() => { ta.focus(); ta.select(); }, 0);
   }
   function extractIframeSrc(input) {
     if (!input) return '';
@@ -521,24 +766,39 @@
     const root = $('#modal-root');
     const canPlan = ['Planner', 'Supervisor'].includes(state.user.role);
     const wait = waitingTrade(job);
+    const place = puForUnit(job.unit);
     const tpl = state.settings?.url_templates || {};
-    const refs = { workOrder: job.sap_work_order || job.wo_number, sapNotification: job.sap_notification, permitVision: job.permit_vision_id, equipmentTag: job.equipment_tag, functionalLocation: job.functional_location };
-    const links = [];
-    const sapUrl = fillTemplate(tpl.sap, refs); if (sapUrl && (job.sap_work_order || job.wo_number)) links.push({ label: 'Open in SAP', url: sapUrl });
-    const pvUrl = fillTemplate(tpl.permitVision, refs); if (pvUrl && job.permit_vision_id) links.push({ label: 'Open in Permit Vision', url: pvUrl });
-    const pbiUrl = fillTemplate(tpl.powerBi, refs); if (pbiUrl) links.push({ label: 'Open in Power BI', url: pbiUrl });
+    const refs = jobRefs(job);
+    const utlHref = externalUrl(tpl.utl);
+    const launchHtml = [
+      launchAnchor('Open in SAP', (tpl.sap && (job.sap_work_order || job.wo_number)) ? templateReady(tpl.sap, refs) : ''),
+      launchAnchor('Open in Permit Vision', (tpl.permitVision && job.permit_vision_id) ? templateReady(tpl.permitVision, refs) : ''),
+      launchAnchor('Open in Power BI', tpl.powerBi ? templateReady(tpl.powerBi, refs) : ''),
+      launchAnchor('Digital twin', digitalTwinUrl(tpl.digitalTwin, refs)),
+      launchAnchor('P&ID', pidLinkUrl(tpl.pid, refs)),
+    ].join('');
+    const utlOpen = utlHref
+      ? '<a class="btn btn-sm" href="' + esc(utlHref) + '" target="_blank" rel="noopener noreferrer">Open UTL log</a>'
+      : disabledBtn('Open UTL log');
 
     root.innerHTML = '<div class="overlay" id="job-overlay"><div class="modal" role="dialog">' +
       '<div class="modal-head"><div><div class="wo">' + esc(job.wo_number) + '</div><div class="title" style="margin:0">' + esc(job.title) + '</div>' +
-      '<div class="meta" style="margin-top:8px"><span class="chip">' + esc(job.unit) + ' · ' + esc(job.area || '') + '</span><span class="chip">' + esc(job.equipment_tag) + '</span><span class="chip">' + esc(job.priority) + '</span></div></div>' +
+      '<div class="meta" style="margin-top:8px"><span class="chip">' + esc(job.unit) + ' · ' + esc(job.area || '') + '</span>' +
+      (place.pu ? '<span class="chip pu">' + esc((place.site ? place.site + ' · ' : '') + place.pu) + '</span>' : '') +
+      '<span class="chip">' + esc(job.equipment_tag) + '</span><span class="chip">' + esc(job.priority) + '</span></div></div>' +
       '<button class="btn btn-sm" id="close-modal">Close</button></div><div class="modal-body">' +
+      (job.equipment_location ? '<div class="equip-loc"><span class="k">Equipment location</span><span class="v">' + esc(job.equipment_location) + '</span></div>' : '') +
       (job.on_hold ? '<div class="hold-banner">ON HOLD — ' + esc(job.hold_reason || '') + ' (' + esc(job.hold_by || '') + ')</div>' : '') +
       '<p style="color:var(--muted);margin-top:0">' + esc(job.description || '') + '</p>' +
       '<div class="meta"><span class="chip">Permit: ' + esc(job.permit_number || '—') + '</span><span class="chip">LOTO: ' + esc(job.loto_isolation || '—') + '</span>' +
       '<span class="chip">SAP WO: ' + esc(job.sap_work_order || job.wo_number || '—') + '</span><span class="chip">SAP notif: ' + esc(job.sap_notification || '—') + '</span>' +
       '<span class="chip">PV: ' + esc(job.permit_vision_id || '—') + '</span><span class="chip">FLoc: ' + esc(job.functional_location || '—') + '</span>' +
+      '<span class="chip">P&ID: ' + esc(job.pid_number || '—') + '</span>' +
       (wait ? '<span class="chip hot">Next: ' + esc(wait.label) + '</span>' : '') + '</div>' +
-      '<div class="launch-row">' + (links.map((l) => '<a class="btn btn-sm" href="' + esc(l.url) + '" target="_blank" rel="noopener noreferrer">' + esc(l.label) + '</a>').join('') || '<span class="chip">No external launch links configured</span>') + '</div>' +
+      '<div class="launch-row">' + launchHtml + '</div>' +
+      '<div class="utl-row"><span class="utl-label">Copy to UTL log</span>' +
+      '<button type="button" class="btn btn-sm btn-primary" data-utl="today">Today\'s notes only</button>' +
+      '<button type="button" class="btn btn-sm" data-utl="all">All notes</button>' + utlOpen + '</div>' +
       '<div class="permit-status unavailable"><strong>UNAVAILABLE</strong> · source: Permit Vision (stub — not connected) · as of ' + fmtTime(new Date().toISOString()) +
       '<div>Live permit status unavailable. Do not treat as approved. Configure Permit Vision via Shell IT (see INTEGRATIONS.md).</div></div>' +
       '<p class="permit-status-note">External permit status is informational only. Grey/warning means not validated — never treat as approved.</p>' +
@@ -557,10 +817,17 @@
     let channel = 'trades';
     const renderComments = () => {
       const items = (job.comments || []).filter((c) => c.channel === channel);
-      $('#comments').innerHTML = items.map((c) => '<div class="comment"><div class="who">' + esc(c.author_name) + ' · ' + esc(c.author_role) + ' · ' + fmtTime(c.created_at) + '</div><div>' + esc(c.body) + '</div>' +
+      $('#comments').innerHTML = items.map((c) => '<div class="comment"><div class="who"><span>' + esc(c.author_name) + ' · ' + esc(c.author_role) + ' · ' + fmtTime(c.created_at) + '</span><button type="button" class="btn btn-sm" data-copy-comment="' + esc(c.id) + '">Copy to UTL log</button></div><div>' + esc(c.body) + '</div>' +
         (c.photo_path ? '<img src="' + esc(c.photo_path) + '" alt="attachment" />' : '') + '</div>').join('') || '<div class="empty">No notes yet.</div>';
+      $$('[data-copy-comment]', root).forEach((btn) => {
+        btn.onclick = () => {
+          const comment = (job.comments || []).find((c) => c.id === btn.dataset.copyComment);
+          if (comment) copyText(buildUtlLog(job, { onlyComment: comment }));
+        };
+      });
     };
     renderComments();
+    $$('[data-utl]', root).forEach((btn) => { btn.onclick = () => copyText(buildUtlLog(job, { notes: btn.dataset.utl })); });
     $$('.comment-tabs .tab', root).forEach((t) => { t.onclick = () => { $$('.comment-tabs .tab', root).forEach((x) => x.classList.remove('active')); t.classList.add('active'); channel = t.dataset.channel; renderComments(); }; });
     $('#close-modal').onclick = () => { root.innerHTML = ''; };
     $('#job-overlay').onclick = (e) => { if (e.target.id === 'job-overlay') root.innerHTML = ''; };
@@ -678,6 +945,8 @@
         '<div><label class="lbl">SAP notification</label><input class="input" id="f-sap-not" value="' + esc(existing?.sap_notification || '') + '" /></div>' +
         '<div><label class="lbl">Permit Vision #</label><input class="input" id="f-pv" value="' + esc(existing?.permit_vision_id || '') + '" /></div>' +
         '<div><label class="lbl">Functional location</label><input class="input" id="f-floc" value="' + esc(existing?.functional_location || '') + '" /></div>' +
+        '<div><label class="lbl">P&amp;ID / drawing #</label><input class="input" id="f-pid" value="' + esc(existing?.pid_number || '') + '" /></div>' +
+        '<div><label class="lbl">Equipment location</label><input class="input" id="f-loc" placeholder="Area / elevation / grid" value="' + esc(existing?.equipment_location || '') + '" /></div>' +
         '<div style="grid-column:1/-1"><label class="lbl">Description</label><textarea class="textarea" id="f-desc">' + esc(existing?.description || '') + '</textarea></div></div>' +
         '<label class="lbl">Quick templates</label><div class="template-row">' + Object.entries(TEMPLATES).map(([k, v]) => '<button type="button" class="btn btn-sm" data-tpl="' + k + '">' + esc(v.name) + '</button>').join('') + '</div>' +
         '<label class="lbl">Tap trades to build sequence</label><div class="trade-chips">' + TRADES.map((t) => '<button type="button" class="trade-chip" data-trade="' + t.id + '">+ ' + esc(t.label) + '</button>').join('') +
@@ -702,7 +971,8 @@
           priority: $('#f-pri').value, job_date: $('#f-date').value, permit_number: $('#f-permit').value.trim(),
           loto_isolation: $('#f-loto').value.trim(), sap_work_order: $('#f-sap-wo').value.trim(),
           sap_notification: $('#f-sap-not').value.trim(), permit_vision_id: $('#f-pv').value.trim(),
-          functional_location: $('#f-floc').value.trim(), description: $('#f-desc').value.trim(),
+          functional_location: $('#f-floc').value.trim(), pid_number: $('#f-pid').value.trim(),
+          equipment_location: $('#f-loc').value.trim(), description: $('#f-desc').value.trim(),
           updated_at: new Date().toISOString(),
         };
         if (!steps.length) return toast('Add at least one trade step');
@@ -733,7 +1003,7 @@
   function openImport() {
     const root = $('#modal-root');
     let preview = null; let mapping = {};
-    root.innerHTML = '<div class="overlay"><div class="modal"><div class="modal-head"><strong>Import backlog</strong><button class="btn btn-sm" id="close-imp">Close</button></div><div class="modal-body"><p style="color:var(--muted)">Upload .xlsx / .csv. Map columns, pick a default template, then import (client-side SheetJS → Supabase).</p><input type="file" id="imp-file" accept=".xlsx,.xls,.csv" /><div id="imp-body"></div></div></div></div>';
+    root.innerHTML = '<div class="overlay"><div class="modal"><div class="modal-head"><strong>Import backlog</strong><button class="btn btn-sm" id="close-imp">Close</button></div><div class="modal-body"><p style="color:var(--muted)">Upload .xlsx / .csv. Map columns, pick a default template, then import (client-side SheetJS → Supabase). Process unit is derived from the unit (Upgrader South → PU1 / PU2) and is not stored as its own column.</p><input type="file" id="imp-file" accept=".xlsx,.xls,.csv" /><div id="imp-body"></div></div></div></div>';
     $('#close-imp').onclick = () => { root.innerHTML = ''; };
     $('#imp-file').onchange = async (e) => {
       const file = e.target.files[0]; if (!file) return;
@@ -743,10 +1013,10 @@
       preview = { headers: rows.length ? Object.keys(rows[0]) : [], rows, allRows: rows, total: rows.length };
       autoMap(); drawImport();
     };
-    const fields = [['wo_number','Work Order'],['sap_work_order','SAP Work Order'],['sap_notification','SAP Notification'],['permit_vision_id','Permit Vision #'],['functional_location','Functional Location'],['title','Title'],['description','Description'],['unit','Unit'],['area','Area'],['equipment_tag','Tag'],['priority','Priority'],['job_date','Date'],['permit_number','Permit'],['loto_isolation','LOTO'],['trades','Trades']];
+    const fields = [['wo_number','Work Order'],['sap_work_order','SAP Work Order'],['sap_notification','SAP Notification'],['permit_vision_id','Permit Vision #'],['functional_location','Functional Location'],['pid_number','P&ID / drawing #'],['equipment_location','Equipment location'],['title','Title'],['description','Description'],['unit','Unit'],['area','Area'],['equipment_tag','Tag'],['priority','Priority'],['job_date','Date'],['permit_number','Permit'],['loto_isolation','LOTO'],['trades','Trades']];
     function autoMap() {
       mapping = {};
-      const guess = { wo_number:[/work\s*order/i,/^wo$/i], sap_work_order:[/sap\s*work/i], sap_notification:[/notif/i], permit_vision_id:[/permit\s*vision/i], functional_location:[/functional/i,/floc/i], title:[/^title$/i], description:[/desc/i,/title/i], unit:[/unit/i], area:[/area/i], equipment_tag:[/^tag$/i,/equip/i], priority:[/prior/i], job_date:[/date/i], permit_number:[/^permit$/i,/ptw/i], loto_isolation:[/loto/i], trades:[/trade/i] };
+      const guess = { wo_number:[/work\s*order/i,/^wo$/i], sap_work_order:[/sap\s*work/i], sap_notification:[/notif/i], permit_vision_id:[/permit\s*vision/i], functional_location:[/functional/i,/floc/i], pid_number:[/p\s*&?\s*id/i,/\bpid\b/i,/drawing/i], equipment_location:[/equip.*loc/i,/^location$/i,/elevation/i,/^grid$/i], title:[/^title$/i], description:[/desc/i,/title/i], unit:[/unit/i], area:[/area/i], equipment_tag:[/^tag$/i,/equip.*tag/i,/equipment(?!\s*loc)/i], priority:[/prior/i], job_date:[/date/i], permit_number:[/^permit$/i,/ptw/i], loto_isolation:[/loto/i], trades:[/trade/i] };
       for (const [field, rxList] of Object.entries(guess)) { const hit = preview.headers.find((h) => rxList.some((rx) => rx.test(h))); if (hit) mapping[field] = hit; }
       if (!mapping.title && mapping.description) mapping.title = mapping.description;
     }
@@ -772,7 +1042,8 @@
               unit: normalizeUnit(get('unit')), area: get('area'), equipment_tag: get('equipment_tag'), priority: get('priority') || 'Normal',
               job_date: get('job_date') || new Date().toISOString().slice(0, 10), permit_number: get('permit_number'), loto_isolation: get('loto_isolation'),
               sap_work_order: get('sap_work_order') || get('wo_number'), sap_notification: get('sap_notification'), permit_vision_id: get('permit_vision_id'),
-              functional_location: get('functional_location'), created_by: state.user.name, status: 'not_started',
+              functional_location: get('functional_location'), pid_number: get('pid_number'), equipment_location: get('equipment_location'),
+              created_by: state.user.name, status: 'not_started',
             }).select().single();
             if (error) throw error;
             for (let i = 0; i < tpl.steps.length; i++) {
@@ -781,7 +1052,7 @@
             }
             await audit(job.id, 'job_created', 'Imported ' + job.wo_number); n++;
           }
-          await sb.from('app_settings').upsert({ id: 'default', data_source: { ...(state.settings?.data_source || {}), adapter: 'excel', label: 'Excel / CSV import → Supabase', lastUpdated: new Date().toISOString(), units: getUnits() }, updated_at: new Date().toISOString() });
+          await sb.from('app_settings').upsert({ id: 'default', data_source: { ...(state.settings?.data_source || {}), adapter: 'excel', label: 'Excel / CSV import → Supabase', lastUpdated: new Date().toISOString(), units: getUnits(), sites: getSites() }, updated_at: new Date().toISOString() });
           await loadMeta(); toast('Imported ' + n + ' jobs'); await refreshAll(true); root.innerHTML = ''; setView('jobs');
         } catch (err) { toast(err.message); }
       };
@@ -791,7 +1062,8 @@
   function exportExcel() {
     const rows = state.jobs.map((j) => {
       const waiting = waitingTrade(j);
-      return { 'Work Order': j.wo_number, 'SAP Work Order': j.sap_work_order, 'SAP Notification': j.sap_notification, 'Permit Vision': j.permit_vision_id, 'Functional Location': j.functional_location, Title: j.title, Unit: j.unit, Area: j.area, Tag: j.equipment_tag, Priority: j.priority, Status: j.status, 'On Hold': j.on_hold ? 'Yes' : 'No', 'Hold Reason': j.hold_reason || '', 'Waiting On': waiting ? waiting.trade : '', Permit: j.permit_number, LOTO: j.loto_isolation, Date: j.job_date, Steps: j.steps.map((s) => s.label + ' [' + s.status + ']').join(' > ') };
+      const place = puForUnit(j.unit);
+      return { 'Work Order': j.wo_number, 'SAP Work Order': j.sap_work_order, 'SAP Notification': j.sap_notification, 'Permit Vision': j.permit_vision_id, 'Functional Location': j.functional_location, 'P&ID': j.pid_number || '', 'Equipment location': j.equipment_location || '', Title: j.title, Unit: j.unit, PU: place.pu, Site: place.site, Area: j.area, Tag: j.equipment_tag, Priority: j.priority, Status: j.status, 'On Hold': j.on_hold ? 'Yes' : 'No', 'Hold Reason': j.hold_reason || '', 'Waiting On': waiting ? waiting.trade : '', Permit: j.permit_number, LOTO: j.loto_isolation, Date: j.job_date, Steps: j.steps.map((s) => s.label + ' [' + s.status + ']').join(' > ') };
     });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Jobs');
@@ -803,15 +1075,38 @@
     $('#search').oninput = (e) => { state.filters.q = e.target.value; renderJobList(); };
     $('#filter-status').onchange = (e) => { state.filters.status = e.target.value; renderJobList(); };
     $('#filter-priority').onchange = (e) => { state.filters.priority = e.target.value; renderJobList(); };
-    $('#filter-unit').onchange = (e) => { state.filters.unit = e.target.value; renderJobList(); };
+    $('#filter-unit').onchange = (e) => {
+      state.filters.unit = e.target.value;
+      if (state.filters.unit) {
+        const info = puForUnit(state.filters.unit);
+        if (info.pu) state.filters.pu = info.pu;
+      }
+      renderJobList();
+    };
     $('#filter-trade').onchange = (e) => { state.filters.trade = e.target.value; renderJobList(); };
     document.addEventListener('click', (e) => {
+      const puChip = e.target.closest('[data-pu-tab]');
+      if (puChip) {
+        const which = puChip.dataset.puTab;
+        const pu = puChip.dataset.pu || '';
+        if (which === 'jobs') { state.filters.pu = pu; state.filters.unit = ''; const sel = $('#filter-unit'); if (sel) sel.value = ''; renderJobList(); }
+        else if (which === 'board') { state.boardPu = pu; state.boardUnit = ''; renderBoard(); }
+        return;
+      }
       const chip = e.target.closest('[data-unit-tab]');
       if (!chip) return;
       const which = chip.dataset.unitTab;
       const unit = chip.dataset.unit || '';
-      if (which === 'jobs') { state.filters.unit = unit; const sel = $('#filter-unit'); if (sel) sel.value = unit; renderJobList(); }
-      else if (which === 'board') { state.boardUnit = unit; renderBoard(); }
+      if (which === 'jobs') {
+        state.filters.unit = unit;
+        if (unit) { const info = puForUnit(unit); if (info.pu) state.filters.pu = info.pu; }
+        const sel = $('#filter-unit'); if (sel) sel.value = unit;
+        renderJobList();
+      } else if (which === 'board') {
+        state.boardUnit = unit;
+        if (unit) { const info = puForUnit(unit); if (info.pu) state.boardPu = info.pu; }
+        renderBoard();
+      }
     });
     $('#btn-refresh').onclick = () => refreshAll(true);
     $('#btn-new-job').onclick = () => openJobEditor(null);
@@ -821,7 +1116,13 @@
     $('#btn-logout').onclick = () => { localStorage.removeItem('bl_user'); location.reload(); };
     $('#btn-hc').onclick = () => { document.documentElement.classList.toggle('hc'); localStorage.setItem('bl_hc', document.documentElement.classList.contains('hc') ? '1' : '0'); };
     if (localStorage.getItem('bl_hc') === '1') document.documentElement.classList.add('hc');
-    $('#btn-notify').onclick = async () => { const p = await Notification.requestPermission(); toast(p === 'granted' ? 'Notifications enabled' : 'Notifications blocked'); };
+    $('#btn-notify').onclick = async () => {
+      if (!('Notification' in window)) return toast('Notifications not available in this browser');
+      try {
+        const p = await Notification.requestPermission();
+        toast(p === 'granted' ? 'Notifications enabled' : 'Notifications blocked');
+      } catch { toast('Notifications blocked'); }
+    };
     $('#adm-save').onclick = async () => {
       try {
         const tiles = $$('#adm-tiles .tile-edit').map((row, i) => ({
@@ -832,10 +1133,20 @@
         const embedUrl = extractIframeSrc($('#adm-pbi-embed').value.trim());
         const unitsRaw = ($('#adm-units')?.value || '').split(/\n|,/).map((s) => s.trim()).filter(Boolean);
         const units = unitsRaw.length ? unitsRaw : DEFAULT_UNITS.slice();
-        const ds = { ...(state.settings?.data_source || {}), units, adapter: state.settings?.data_source?.adapter || 'supabase', label: state.settings?.data_source?.label || 'Supabase (Beamlock)' };
+        const parsedSites = parseSites($('#adm-sites')?.value || '');
+        const sites = parsedSites.length ? parsedSites : cloneSites(DEFAULT_SITES);
+        const ds = { ...(state.settings?.data_source || {}), units, sites, adapter: state.settings?.data_source?.adapter || 'supabase', label: state.settings?.data_source?.label || 'Supabase (Beamlock)' };
         await sb.from('app_settings').upsert({
           id: 'default',
-          url_templates: { sap: $('#adm-sap').value.trim(), permitVision: $('#adm-pv').value.trim(), powerBi: $('#adm-pbi-tpl').value.trim() },
+          url_templates: {
+            ...(state.settings?.url_templates || {}),
+            sap: $('#adm-sap').value.trim(),
+            permitVision: $('#adm-pv').value.trim(),
+            powerBi: $('#adm-pbi-tpl').value.trim(),
+            digitalTwin: ($('#adm-twin')?.value || '').trim(),
+            pid: ($('#adm-pid')?.value || '').trim(),
+            utl: ($('#adm-utl')?.value || '').trim(),
+          },
           power_bi_embed: { embedUrl, title: $('#adm-pbi-title').value.trim(), lastConfiguredAt: new Date().toISOString() },
           data_source: ds,
           updated_at: new Date().toISOString(),

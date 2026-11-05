@@ -68,7 +68,7 @@
 
       <section id="view-jobs">
         <div class="filters">
-          <input id="search" class="input" placeholder="Search WO / SAP / PV / tag / unit / FLoc…" />
+          <input id="search" class="input" placeholder="Search WO / SAP / PV / tag / unit / PU / FLoc…" />
           <select id="filter-status" class="select">
             <option value="">All statuses</option>
             <option value="not_started">Not started</option>
@@ -92,6 +92,7 @@
           </select>
           <button class="btn btn-sm" id="btn-refresh">Refresh</button>
         </div>
+        <div class="pu-tabs" id="pu-tabs" aria-label="Filter by process unit"></div>
         <div class="unit-tabs" id="unit-tabs" aria-label="Filter by unit"></div>
         <div class="stats" id="mini-stats"></div>
         <div class="job-grid" id="job-list"></div>
@@ -103,6 +104,7 @@
       </section>
 
       <section id="view-board" class="hidden board-view">
+        <div class="pu-tabs" id="board-pu-tabs" aria-label="Board process unit filter"></div>
         <div class="unit-tabs" id="board-unit-tabs" aria-label="Board unit filter"></div>
         <div class="stats" id="board-stats"></div>
         <div id="board-list"></div>
@@ -126,7 +128,7 @@
       <section id="view-dashboards" class="hidden">
         <div class="dash-head">
           <h2 id="pbi-title" style="margin:0;color:var(--navy)">Power BI</h2>
-          <a class="btn btn-sm" id="pbi-open" href="#" target="_blank" rel="noopener noreferrer" style="display:none">Open in Power BI</a>
+          <a class="btn btn-sm" id="pbi-open" target="_blank" rel="noopener noreferrer" hidden>Open in Power BI</a>
         </div>
         <p class="permit-status-note">Paste a Power BI secure embed URL in Admin. HTTPS required.</p>
         <div id="pbi-frame-wrap" class="pbi-wrap"><div class="empty">No Power BI embed configured yet.</div></div>
@@ -143,6 +145,13 @@
             <input class="input" id="adm-pv" placeholder="https://permits.example/...{permitVision}..." />
             <label class="lbl">Power BI report URL template</label>
             <input class="input" id="adm-pbi-tpl" placeholder="https://app.powerbi.com/...{workOrder}..." />
+            <label class="lbl">Digital twin URL template</label>
+            <input class="input" id="adm-twin" placeholder="https://twin.example/{equipmentTag}?unit={unit}" />
+            <label class="lbl">P&amp;ID URL template</label>
+            <input class="input" id="adm-pid" placeholder="https://dms.example/pid/{pidNumber}" />
+            <label class="lbl">UTL log system URL</label>
+            <input class="input" id="adm-utl" placeholder="Leave blank. https://utl.example/log" />
+            <p class="permit-status-note">Tokens: {equipmentTag} {functionalLocation} {unit} {workOrder} {pidNumber}. Leave UTL blank until the plant log URL is known.</p>
           </div>
           <div>
             <label class="lbl">Power BI secure embed URL or iframe HTML</label>
@@ -154,6 +163,9 @@
         <h3>Plant units</h3>
         <p style="color:var(--muted);margin-top:0">Admin-editable list used for job forms, filters, board grouping, and import mapping. One unit per line.</p>
         <textarea class="textarea" id="adm-units" rows="6" placeholder="RHC&#10;A&amp;V&#10;SRU&#10;COGEN&#10;Waterblock&#10;HMU"></textarea>
+        <h3>Process areas</h3>
+        <p style="color:var(--muted);margin-top:0">Site / area, then each process unit and its plant units. A site name on its own line, then <code>PU: unit, unit</code>. Jobs take their PU from the unit. Used by filters, the board, import, and export.</p>
+        <textarea class="textarea" id="adm-sites" rows="6" placeholder="Upgrader South&#10;PU1: HMU, RHC&#10;PU2: A&amp;V, SRU, COGEN, Waterblock"></textarea>
         <h3>App tiles</h3>
         <div id="adm-tiles"></div>
         <button class="btn btn-primary" id="adm-save" style="margin-top:12px">Save integration settings</button>
