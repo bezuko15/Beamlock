@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <base href="./" />
+<meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#324259" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="description" content="Beamlock — Trade sign-off. Real time." />
+  <!-- Static-host CSP / COOP (GitHub Pages / Surge cannot set all response headers) -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://*.supabase.co; script-src 'self' 'unsafe-inline' https://*.supabase.co https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://*.supabase.co; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co; frame-src 'self' https://app.powerbi.com https://*.powerbi.com https://login.microsoftonline.com; child-src 'self' https://app.powerbi.com https://*.powerbi.com https://login.microsoftonline.com; font-src 'self' data:; object-src 'none'; base-uri 'self' https://*.supabase.co; manifest-src 'self' https://*.supabase.co" />
+  <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin-allow-popups" />
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" href="./icons/favicon.png" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <title>Beamlock</title>
+  <link rel="stylesheet" href="./css/app.css" />
+</head>
+<body>
+  <div id="login" class="login">
+    <div class="login-card">
+      <div class="brand" style="margin-bottom:12px;color:var(--navy)">
+        <img src="./icons/icon-192.png" alt="Beamlock" />
+        <div>BEAMLOCK<span class="sub" style="color:var(--muted)">Trade sign-off. Real time.</span></div>
+      </div>
+      <h1>Sign in</h1>
+      <p>Pick your name and role. Prototype auth — production would use Microsoft Entra ID SSO.</p>
+      <label class="lbl">Your name</label>
+      <input id="login-name" class="input" list="people-list" placeholder="e.g. Chris Alvarez" autocomplete="name" />
+      <datalist id="people-list"></datalist>
+      <label class="lbl" style="margin-top:12px">Role</label>
+      <div class="role-grid" id="role-grid"></div>
+      <label class="lbl">Demo PIN (optional)</label>
+      <input id="login-pin" class="input" type="password" inputmode="numeric" placeholder="1234" />
+      <button class="btn btn-primary btn-block" style="margin-top:16px" id="login-btn">Enter Beamlock</button>
+      <p style="font-size:12px;margin-top:14px">Tip: use a trade role to see <strong>My trade</strong> jobs waiting on you.</p>
+    </div>
+  </div>
+
+  <div id="app" class="hidden">
+    <header class="app-header">
+      <div class="brand">
+        <img src="./icons/icon-192.png" alt="" />
+        <div>BEAMLOCK<span class="sub">Trade sign-off. Real time.</span></div>
+      </div>
+      <div class="header-actions">
+        <div class="user-pill"><span class="live-dot" id="live-dot"></span><span id="user-label"></span></div>
+        <button class="btn btn-sm btn-ghost" id="btn-hc">HC</button>
+        <button class="btn btn-sm btn-ghost" id="btn-notify">Notify</button>
+        <button class="btn btn-sm btn-ghost" id="btn-logout">Switch user</button>
+      </div>
+    </header>
+    <main class="layout">
+      <div class="safety-banner" id="safety-banner">
+        <strong>Safety notice:</strong> Sign-offs track work progress only. They do <em>not</em> issue or approve permits and do <em>not</em> authorize isolations or LOTO.
+      </div>
+      <div class="datasource-bar" id="datasource-bar">Data source: loading…</div>
+      <div class="tabs" id="main-tabs">
+        <button class="tab active" data-view="jobs">Jobs</button>
+        <button class="tab" data-view="mine">My trade <span class="badge" id="mine-count">0</span></button>
+        <button class="tab" data-view="board">Live board</button>
+        <button class="tab" data-view="planner" id="tab-planner">Planner</button>
+        <button class="tab" data-view="apps">Apps</button>
+        <button class="tab" data-view="dashboards">Dashboards</button>
+        <button class="tab" data-view="audit">Audit</button>
+        <button class="tab" data-view="admin" id="tab-admin">Admin</button>
+      </div>
+
+      <section id="view-jobs">
+        <div class="filters">
+          <input id="search" class="input" placeholder="Search WO / SAP / PV / tag / unit / FLoc…" />
+          <select id="filter-status" class="select">
+            <option value="">All statuses</option>
+            <option value="not_started">Not started</option>
+            <option value="in_progress">In progress</option>
+            <option value="on_hold">On hold</option>
+            <option value="done">Done</option>
+          </select>
+          <select id="filter-priority" class="select">
+            <option value="">All priorities</option>
+            <option>Critical</option><option>High</option><option>Normal</option><option>Low</option>
+          </select>
+          <select id="filter-unit" class="select">
+            <option value="">All units</option>
+          </select>
+          <select id="filter-trade" class="select">
+            <option value="">All trades</option>
+            <option value="Insulator">Insulators</option>
+            <option value="Electrician">Electrical</option>
+            <option value="Pipefitter">Pipefitters</option>
+            <option value="NDE">NDE</option>
+          </select>
+          <button class="btn btn-sm" id="btn-refresh">Refresh</button>
+        </div>
+        <div class="unit-tabs" id="unit-tabs" aria-label="Filter by unit"></div>
+        <div class="stats" id="mini-stats"></div>
+        <div class="job-grid" id="job-list"></div>
+      </section>
+
+      <section id="view-mine" class="hidden">
+        <p style="color:var(--muted);margin-top:0">Jobs where your trade is ready or in progress.</p>
+        <div class="job-grid" id="mine-list"></div>
+      </section>
+
+      <section id="view-board" class="hidden board-view">
+        <div class="unit-tabs" id="board-unit-tabs" aria-label="Board unit filter"></div>
+        <div class="stats" id="board-stats"></div>
+        <div id="board-list"></div>
+      </section>
+
+      <section id="view-planner" class="hidden">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px">
+          <button class="btn btn-primary" id="btn-new-job">+ New job</button>
+          <button class="btn" id="btn-import">Import Excel / CSV</button>
+          <a class="btn" href="./sample/sample-backlog.xlsx" download>Download sample backlog</a>
+          <button class="btn" id="btn-export">Export Excel</button>
+        </div>
+        <div class="job-grid" id="planner-list"></div>
+      </section>
+
+      <section id="view-apps" class="hidden">
+        <p style="color:var(--muted);margin-top:0">Plant systems &amp; links (placeholders until Shell IT provides URLs).</p>
+        <div class="app-tiles" id="app-tiles"></div>
+      </section>
+
+      <section id="view-dashboards" class="hidden">
+        <div class="dash-head">
+          <h2 id="pbi-title" style="margin:0;color:var(--navy)">Power BI</h2>
+          <a class="btn btn-sm" id="pbi-open" href="#" target="_blank" rel="noopener noreferrer" style="display:none">Open in Power BI</a>
+        </div>
+        <p class="permit-status-note">Paste a Power BI secure embed URL in Admin. HTTPS required.</p>
+        <div id="pbi-frame-wrap" class="pbi-wrap"><div class="empty">No Power BI embed configured yet.</div></div>
+      </section>
+
+      <section id="view-admin" class="hidden">
+        <h2 style="margin-top:0;color:var(--navy)">Admin · integrations</h2>
+        <p style="color:var(--muted)">URL templates, app tiles, Power BI embed. Anon key only in the browser — never service_role.</p>
+        <div class="admin-grid">
+          <div>
+            <label class="lbl">SAP open URL template</label>
+            <input class="input" id="adm-sap" placeholder="https://sap.example/...{workOrder}..." />
+            <label class="lbl">Permit Vision URL template</label>
+            <input class="input" id="adm-pv" placeholder="https://permits.example/...{permitVision}..." />
+            <label class="lbl">Power BI report URL template</label>
+            <input class="input" id="adm-pbi-tpl" placeholder="https://app.powerbi.com/...{workOrder}..." />
+          </div>
+          <div>
+            <label class="lbl">Power BI secure embed URL or iframe HTML</label>
+            <textarea class="textarea" id="adm-pbi-embed" placeholder="https://app.powerbi.com/reportEmbed?..."></textarea>
+            <label class="lbl">Embed title</label>
+            <input class="input" id="adm-pbi-title" value="Maintenance dashboard" />
+          </div>
+        </div>
+        <h3>Plant units</h3>
+        <p style="color:var(--muted);margin-top:0">Admin-editable list used for job forms, filters, board grouping, and import mapping. One unit per line.</p>
+        <textarea class="textarea" id="adm-units" rows="6" placeholder="RHC&#10;A&amp;V&#10;SRU&#10;COGEN&#10;Waterblock&#10;HMU"></textarea>
+        <h3>App tiles</h3>
+        <div id="adm-tiles"></div>
+        <button class="btn btn-primary" id="adm-save" style="margin-top:12px">Save integration settings</button>
+      </section>
+
+      <section id="view-audit" class="hidden">
+        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+          <button class="btn btn-sm" id="btn-audit-refresh">Refresh audit</button>
+        </div>
+        <div class="audit-list" id="audit-list"></div>
+      </section>
+
+      <p class="footer-note">Beamlock prototype · Supabase Realtime · Synthetic demo data only</p>
+    </main>
+  </div>
+
+  <div id="toast-wrap" class="toast-wrap"></div>
+  <div id="modal-root"></div>
+
+  <script src="./vendor/supabase.js"></script>
+  <script src="./vendor/xlsx.full.min.js"></script>
+  <script src="./js/config.js"></script>
+  <script src="./js/app.js"></script>
+</body>
+</html>
