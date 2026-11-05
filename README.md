@@ -19,6 +19,14 @@ Do **not** use the Supabase Edge Function URL for the app UI (wrong MIME / CSP i
 3. Pick a role (Planner / Supervisor see Planner + Admin)  
 4. Optional PIN: **1234**
 
+## Maintenance schedule import
+
+Planners use **Import maintenance schedule** on the Planner tab. The sheet is the site planning export (one row per operation). Columns are detected automatically, including a title row above the headers. Re-import updates the same order and does not touch sign-offs, comments, photos, skips, permit holders, or radio channels. **Download maintenance schedule sample** is synthetic data only.
+
+## Trades
+
+Insulators, Electrical / EHT, Pipefitters, NDE, Team, Scaffold, Crane, Extra, Instrumentation, Boilermakers, Vac truck, Labourers, and HVAC. Admin can add, rename, reorder, set the short code, and deactivate trades. The list is stored in `app_settings.data_source.trades`. Sign-in, My trade, the board, job steps, and the schedule import all use it. Import maps `insul` to Insulators and `INST` / `instr` to Instrumentation.
+
 ## Plant units
 
 Admin-editable list (stored in `app_settings.data_source.units`):

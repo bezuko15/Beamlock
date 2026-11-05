@@ -6,12 +6,20 @@
   const { createClient } = window.supabase;
   const sb = createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
 
-  const ROLES = ['Planner', 'Supervisor', 'Operator', 'Insulator', 'Electrician', 'Pipefitter', 'NDE'];
-  const TRADES = [
-    { id: 'Insulator', label: 'Insulators', short: 'INS' },
-    { id: 'Electrician', label: 'Electrical', short: 'EL' },
-    { id: 'Pipefitter', label: 'Pipefitters', short: 'FIT' },
-    { id: 'NDE', label: 'NDE', short: 'NDE' },
+  const DEFAULT_TRADES = [
+    { id: 'Insulator', label: 'Insulators', short: 'INS', color: '#5b21b6', active: true },
+    { id: 'Electrician', label: 'Electrical / EHT', short: 'EHT', color: '#c2410c', active: true },
+    { id: 'Pipefitter', label: 'Pipefitters', short: 'FIT', color: '#1d4ed8', active: true },
+    { id: 'NDE', label: 'NDE', short: 'NDE', color: '#0f766e', active: true },
+    { id: 'Team', label: 'Team', short: 'TEAM', color: '#be123c', active: true },
+    { id: 'Scaffold', label: 'Scaffold', short: 'SCAF', color: '#a16207', active: true },
+    { id: 'Crane', label: 'Crane', short: 'CRN', color: '#9a3412', active: true },
+    { id: 'Extra', label: 'Extra', short: 'EX', color: '#334155', active: true },
+    { id: 'Instrumentation', label: 'Instrumentation', short: 'INST', color: '#0369a1', active: true },
+    { id: 'Boilermaker', label: 'Boilermakers', short: 'BM', color: '#9f1239', active: true },
+    { id: 'VacTruck', label: 'Vac truck', short: 'VAC', color: '#155e75', active: true },
+    { id: 'Labourer', label: 'Labourers', short: 'LBR', color: '#3f6212', active: true },
+    { id: 'HVAC', label: 'HVAC', short: 'HVAC', color: '#3730a3', active: true },
   ];
   const TEMPLATES = {
     full_valve: { name: 'Full valve weld-in', steps: [
@@ -36,7 +44,6 @@
     elec_only: { name: 'Electrical only', steps: [{ trade: 'Electrician', label: 'Electrical — work' }] },
     fitters_only: { name: 'Fitters only', steps: [{ trade: 'Pipefitter', label: 'Pipefitters — work' }] },
   };
-  const TRADE_SHORT = { Insulator: 'INS', Electrician: 'EL', Pipefitter: 'FIT', NDE: 'NDE' };
   const DEFAULT_UNITS = ['RHC', 'A&V', 'SRU', 'COGEN', 'Waterblock', 'HMU'];
   const DEFAULT_UNIT_PATTERNS = [
     { pattern: 'Waterblock', unit: 'Waterblock' },
@@ -208,7 +215,7 @@
 
   const state = {
     user: null, people: [], jobs: [], settings: null, tiles: [], view: 'jobs',
-    filters: { q: '', status: '', priority: '', trade: '', unit: '', pu: '' }, boardUnit: '', boardPu: '', channels: {},
+    filters: { q: '', status: '', priority: '', trade: '', unit: '', pu: '', when: '' }, boardUnit: '', boardPu: '', channels: {}, tradeDraft: null,
   };
 
   function esc(s) {
@@ -223,8 +230,31 @@
     try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
     catch { return iso; }
   }
+  function getTrades() {
+    const raw = state.settings?.data_source?.trades;
+    const list = Array.isArray(raw) && raw.length ? raw : DEFAULT_TRADES;
+    return list.map((t) => ({
+      id: String(t.id || '').trim(),
+      label: String(t.label || t.id || 'Trade').trim(),
+      short: String(t.short || '').trim().slice(0, 6).toUpperCase() || String(t.id || 'T').slice(0, 4).toUpperCase(),
+      color: /^#[0-9a-fA-F]{6}$/.test(String(t.color || '')) ? t.color : '#334155',
+      active: t.active !== false,
+    })).filter((t) => t.id);
+  }
+  function activeTrades() { return getTrades().filter((t) => t.active); }
+  function tradeById(id) { return getTrades().find((t) => t.id === id) || null; }
+  function tradeLabel(id) { return tradeById(id)?.label || id || ''; }
+  function tradeShort(id) { return tradeById(id)?.short || String(id || '').slice(0, 4).toUpperCase(); }
+  function tradeColor(id) { return tradeById(id)?.color || '#5b6b7c'; }
+  function signInRoles() {
+    return [{ id: 'Planner', label: 'Planner' }, { id: 'Supervisor', label: 'Supervisor' }, { id: 'Operator', label: 'Operator' }]
+      .concat(activeTrades().map((t) => ({ id: t.id, label: t.label })));
+  }
   function roleTrade(role) {
-    return ({ Insulator: 'Insulator', Electrician: 'Electrician', Pipefitter: 'Pipefitter', NDE: 'NDE' })[role] || null;
+    return getTrades().some((t) => t.id === role) ? role : null;
+  }
+  function tradePip(step) {
+    return '<span class="step-pip ' + step.status + '" style="--tc:' + esc(tradeColor(step.trade)) + '" title="' + esc(tradeLabel(step.trade) + ' — ' + (step.label || '')) + '">' + esc(tradeShort(step.trade)) + '</span>';
   }
   function saveUser(u) { localStorage.setItem('bl_user', JSON.stringify(u)); state.user = u; }
   function loadUser() { try { return JSON.parse(localStorage.getItem('bl_user') || 'null'); } catch { return null; } }
@@ -301,6 +331,9 @@
     if (!Array.isArray(state.settings.data_source.unit_patterns) || !state.settings.data_source.unit_patterns.length) {
       state.settings.data_source.unit_patterns = DEFAULT_UNIT_PATTERNS.map((p) => ({ ...p }));
     }
+    if (!Array.isArray(state.settings.data_source.trades) || !state.settings.data_source.trades.length) {
+      state.settings.data_source.trades = DEFAULT_TRADES.map((t) => ({ ...t }));
+    }
     state.tiles = tiles || [];
   }
 
@@ -315,7 +348,7 @@
 
   function boardStats() {
     const jobs = state.jobs;
-    const byTradeWaiting = { Insulator: 0, Electrician: 0, Pipefitter: 0, NDE: 0 };
+    const byTradeWaiting = {};
     let notStarted = 0, inProgress = 0, done = 0, onHold = 0;
     for (const j of jobs) {
       if (j.on_hold) onHold++;
@@ -329,7 +362,6 @@
   }
 
   function subscribeRealtime() {
-    const dot = $('#live-dot');
     const channel = sb.channel('beamlock-live')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'jobs' }, () => refreshLive())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'steps' }, () => refreshLive())
@@ -350,11 +382,23 @@
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_settings' }, () => loadMeta().then(renderDataSource))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_tiles' }, () => loadMeta().then(() => { if (state.view === 'apps') renderApps(); }))
       .subscribe((status) => {
-        if (dot) dot.classList.toggle('off', status !== 'SUBSCRIBED');
+        if (!navigator.onLine) setLiveStatus('offline');
+        else setLiveStatus(status === 'SUBSCRIBED' ? 'live' : 'reconnecting');
       });
     state.channels.main = channel;
   }
 
+  function setLiveStatus(mode) {
+    const dot = $('#live-dot');
+    const label = $('#live-label');
+    const banner = $('#net-banner');
+    if (dot) dot.classList.toggle('off', mode !== 'live');
+    if (label) label.textContent = mode === 'live' ? 'Live' : mode === 'offline' ? 'Offline' : 'Reconnecting';
+    if (!banner) return;
+    banner.classList.toggle('hidden', mode === 'live');
+    banner.classList.toggle('offline', mode === 'offline');
+    banner.textContent = mode === 'offline' ? 'You are offline. Changes will sync when the connection returns.' : (mode === 'reconnecting' ? 'Reconnecting…' : '');
+  }
   function notify(title, body) {
     if (Notification?.permission === 'granted') {
       try { new Notification(title, { body, icon: './icons/icon-192.png' }); } catch (_) {}
@@ -384,7 +428,7 @@
     await loadMeta();
     $('#people-list').innerHTML = state.people.map((p) => '<option value="' + esc(p.name) + '">').join('');
     const grid = $('#role-grid');
-    grid.innerHTML = ROLES.map((r) => '<button type="button" class="role-btn" data-role="' + esc(r) + '">' + esc(r) + '</button>').join('');
+    grid.innerHTML = signInRoles().map((r) => '<button type="button" class="role-btn" data-role="' + esc(r.id) + '">' + esc(r.label) + '</button>').join('');
     let selected = null;
     grid.onclick = (e) => {
       const b = e.target.closest('.role-btn'); if (!b) return;
@@ -412,10 +456,82 @@
     const canPlan = ['Planner', 'Supervisor'].includes(state.user.role);
     $('#tab-planner').style.display = canPlan ? '' : 'none';
     $('#tab-admin').style.display = canPlan ? '' : 'none';
+    restoreFilters();
+    syncFilterControls();
     renderDataSource();
     subscribeRealtime();
     refreshAll(true);
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+  }
+
+  function isoWeekFromKey(dayKey) {
+    const [y, m, d] = String(dayKey || '').split('-').map(Number);
+    const date = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
+    const dayNum = date.getUTCDay() || 7;
+    date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+    const week = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+    return { year: date.getUTCFullYear(), week };
+  }
+  function weekKeys(dayKey) {
+    const [y, m, d] = String(dayKey || '').split('-').map(Number);
+    const date = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
+    const day = date.getUTCDay() || 7;
+    const monday = new Date(date);
+    monday.setUTCDate(date.getUTCDate() - (day - 1));
+    const keys = [];
+    for (let i = 0; i < 7; i++) {
+      const x = new Date(monday);
+      x.setUTCDate(monday.getUTCDate() + i);
+      keys.push(x.toISOString().slice(0, 10));
+    }
+    return keys;
+  }
+  function jobDateKeys(job) {
+    const keys = [];
+    if (job.job_date) keys.push(String(job.job_date).slice(0, 10));
+    if (job.beam?.dueDate) {
+      const due = new Date(job.beam.dueDate);
+      if (!Number.isNaN(due.getTime())) keys.push(edmontonParts(due).dayKey);
+    }
+    for (const step of job.steps || []) {
+      const iso = step.beam?.earlyStartIso;
+      if (!iso) continue;
+      const when = new Date(iso);
+      if (!Number.isNaN(when.getTime())) keys.push(edmontonParts(when).dayKey);
+    }
+    return keys;
+  }
+  function samePlanningWeek(value, current) {
+    const m = String(value || '').match(/(\d{4})\.(\d{1,2})/);
+    return !!(m && current && Number(m[1]) === current.year && Number(m[2]) === current.week);
+  }
+  function renderTradeFilter() {
+    const sel = $('#filter-trade');
+    if (!sel) return;
+    const cur = state.filters.trade || '';
+    const trades = activeTrades();
+    const extra = cur && !trades.some((t) => t.id === cur) ? [{ id: cur, label: tradeLabel(cur) }] : [];
+    sel.innerHTML = '<option value="">All trades</option>' + trades.concat(extra).map((t) => '<option value="' + esc(t.id) + '"' + (cur === t.id ? ' selected' : '') + '>' + esc(t.label) + '</option>').join('');
+  }
+  function rememberFilters() {
+    if (!state.user?.name) return;
+    const { q, status, priority, trade, unit, pu, when } = state.filters;
+    localStorage.setItem('bl_filters_' + state.user.name, JSON.stringify({ q, status, priority, trade, unit, pu, when }));
+  }
+  function restoreFilters() {
+    try {
+      const saved = JSON.parse(localStorage.getItem('bl_filters_' + (state.user?.name || '')) || 'null');
+      if (!saved) return;
+      state.filters = { q: '', status: '', priority: '', trade: '', unit: '', pu: '', when: '', ...saved };
+    } catch { /* ignore */ }
+  }
+  function syncFilterControls() {
+    if ($('#search')) $('#search').value = state.filters.q || '';
+    if ($('#filter-status')) $('#filter-status').value = state.filters.status || '';
+    if ($('#filter-priority')) $('#filter-priority').value = state.filters.priority || '';
+    if ($('#filter-when')) $('#filter-when').value = state.filters.when || '';
+    renderTradeFilter();
   }
 
   function filteredJobs() {
@@ -434,6 +550,16 @@
     if (trade) list = list.filter((j) => j.steps.some((s) => s.trade === trade));
     if (pu) list = list.filter((j) => puForUnit(j.unit).pu === pu);
     if (unit) list = list.filter((j) => normalizeUnit(j.unit) === unit);
+    if (state.filters.when) {
+      const today = edmontonParts(new Date()).dayKey;
+      const week = new Set(weekKeys(today));
+      const current = isoWeekFromKey(today);
+      list = list.filter((j) => {
+        const dates = jobDateKeys(j);
+        if (state.filters.when === 'today') return dates.includes(today);
+        return dates.some((d) => week.has(d)) || samePlanningWeek(j.beam?.planningWeek, current);
+      });
+    }
     return list;
   }
 
@@ -442,23 +568,27 @@
     const mine = isMyTurn(job);
     const place = puForUnit(job.unit);
     const due = dueInfo(job);
-    const steps = job.steps.map((s) => '<span class="step-pip ' + s.status + '" title="' + esc(s.label) + '">' + (TRADE_SHORT[s.trade] || s.trade.slice(0, 2)) + '</span>').join('');
+    const steps = job.steps.map(tradePip).join('');
+    const quiet = [
+      job.equipment_tag ? 'Tag ' + job.equipment_tag : '',
+      job.functional_location ? 'FL ' + job.functional_location : '',
+      job.sap_notification ? 'Notif ' + job.sap_notification : '',
+      job.permit_vision_id ? 'PV ' + job.permit_vision_id : '',
+      job.pid_number ? 'P&ID ' + job.pid_number : '',
+      job.equipment_location ? 'Loc ' + job.equipment_location : '',
+    ].filter(Boolean);
     return '<article class="job-card priority-' + esc(job.priority) + (job.on_hold ? ' on-hold' : '') + (mine ? ' your-turn' : '') + '" data-id="' + job.id + '" data-pu="' + esc(place.pu) + '" data-site="' + esc(place.site) + '">' +
-      '<div class="job-top"><div class="wo">' + esc(job.wo_number) + '</div><div class="chip ' + (job.on_hold ? 'bad' : job.status === 'done' ? 'ok' : 'hot') + '">' + (job.on_hold ? 'ON HOLD' : esc(String(job.status).replace('_', ' '))) + '</div></div>' +
-      '<div class="title">' + esc(job.title) + '</div><div class="meta">' +
+      '<div class="job-top"><div><div class="title">' + esc(job.title) + '</div><div class="job-kicker">' + esc(job.wo_number) + (job.functional_location ? ' · ' + esc(job.functional_location) : '') + '</div></div><div class="chip ' + (job.on_hold ? 'bad' : job.status === 'done' ? 'ok' : 'hot') + '">' + (job.on_hold ? 'ON HOLD' : esc(String(job.status).replace('_', ' '))) + '</div></div>' +
+      '<div class="meta">' +
       '<span class="chip">' + esc(job.unit || '—') + '</span>' +
       (place.pu ? '<span class="chip pu">' + esc(place.pu) + '</span>' : '') +
-      '<span class="chip">' + esc(job.equipment_tag || 'no tag') + '</span>' +
-      (job.functional_location ? '<span class="chip">FL: ' + esc(job.functional_location) + '</span>' : '') +
-      (job.sap_notification ? '<span class="chip">Notif: ' + esc(job.sap_notification) + '</span>' : '') +
-      (job.permit_vision_id ? '<span class="chip">PV: ' + esc(job.permit_vision_id) + '</span>' : '') +
-      (job.pid_number ? '<span class="chip">P&ID: ' + esc(job.pid_number) + '</span>' : '') +
-      (job.equipment_location ? '<span class="chip">Loc: ' + esc(job.equipment_location) + '</span>' : '') +
       '<span class="chip">' + esc(job.priority) + '</span>' +
       (due ? '<span class="chip ' + due.cls + '">' + esc(due.label) + '</span>' : '') +
-      (wait ? '<span class="chip hot">Waiting: ' + esc(wait.trade) + '</span>' : '') +
+      (wait ? '<span class="chip hot" style="--tc:' + esc(tradeColor(wait.trade)) + '">Waiting: ' + esc(tradeLabel(wait.trade)) + '</span>' : '') +
       (mine ? '<span class="chip hot">YOUR TURN</span>' : '') +
-      '</div><div class="steps-mini">' + steps + '</div>' +
+      '</div>' +
+      (quiet.length ? '<div class="meta quiet">' + quiet.map((t) => '<span class="chip">' + esc(t) + '</span>').join('') + '</div>' : '') +
+      '<div class="steps-mini">' + steps + '</div>' +
       (job.on_hold ? '<div style="margin-top:8px;color:var(--red);font-size:13px;font-weight:700">' + esc(job.hold_reason || '') + '</div>' : '') +
       '</article>';
   }
@@ -510,9 +640,10 @@
   function renderJobList() {
     renderUnitTabs();
     renderUnitFilterSelect();
+    renderTradeFilter();
     const list = filteredJobs();
     const host = $('#job-list');
-    if (!list.length) { host.innerHTML = '<div class="empty">No jobs match.</div>'; return; }
+    if (!list.length) { host.innerHTML = '<div class="empty"><strong>No jobs match</strong><p>Try an order number or functional location, or clear the filters.</p></div>'; return; }
     if (state.filters.unit) {
       host.innerHTML = list.map(jobCard).join('');
       return;
@@ -522,7 +653,7 @@
   function renderMine() {
     const list = state.jobs.filter(isMyTurn);
     $('#mine-count').textContent = String(list.length);
-    $('#mine-list').innerHTML = list.length ? list.map(jobCard).join('') : '<div class="empty">' + (state.user?.trade ? 'Nothing waiting on ' + esc(state.user.trade) + '.' : 'Sign in as a trade role.') + '</div>';
+    $('#mine-list').innerHTML = list.length ? list.map(jobCard).join('') : '<div class="empty"><strong>Nothing waiting</strong><p>' + (state.user?.trade ? 'No jobs are ready for ' + esc(tradeLabel(state.user.trade)) + '.' : 'Sign in as a trade role to see your work.') + '</p></div>';
   }
   function renderBoard() {
     const puFilter = state.boardPu || '';
@@ -535,7 +666,7 @@
     if (tabs) tabs.innerHTML = unitTabsHtml(unitFilter, jobs, 'board', unitsForPu(puFilter));
     if (unitFilter) jobs = jobs.filter((j) => normalizeUnit(j.unit) === unitFilter);
     // stats for filtered set
-    const byTradeWaiting = { Insulator: 0, Electrician: 0, Pipefitter: 0, NDE: 0 };
+    const byTradeWaiting = {};
     let notStarted = 0, inProgress = 0, done = 0, onHold = 0;
     for (const j of jobs) {
       if (j.on_hold) onHold++;
@@ -550,16 +681,16 @@
       '<div class="stat ip"><div class="n">' + inProgress + '</div><div class="l">In progress</div></div>' +
       '<div class="stat hold"><div class="n">' + onHold + '</div><div class="l">On hold</div></div>' +
       '<div class="stat done"><div class="n">' + done + '</div><div class="l">Done</div></div>' +
-      Object.entries(byTradeWaiting).map(([t, n]) => '<div class="stat wait"><div class="n">' + n + '</div><div class="l">Waiting ' + esc(t) + '</div></div>').join('');
+      '<div class="trade-wait-row" style="grid-column:1/-1">' + activeTrades().map((t) => '<span class="trade-wait" style="--tc:' + esc(t.color) + '"><span class="trade-dot"></span>' + esc(t.short) + ' ' + esc(t.label) + ' · ' + (byTradeWaiting[t.id] || 0) + '</span>').join('') + '</div>';
     const host = $('#board-list');
-    if (!jobs.length) { host.innerHTML = '<div class="empty">No jobs on board.</div>'; return; }
+    if (!jobs.length) { host.innerHTML = '<div class="empty"><strong>Board is clear</strong><p>No jobs in this process unit.</p></div>'; return; }
     if (unitFilter) {
       host.innerHTML = '<div class="job-grid board">' + jobs.map(jobCard).join('') + '</div>';
       return;
     }
     host.innerHTML = groupedSectionsHtml(jobs, 'board') || '<div class="empty">No jobs on board.</div>';
   }
-  function renderPlanner() { $('#planner-list').innerHTML = state.jobs.map(jobCard).join('') || '<div class="empty">No jobs yet.</div>'; }
+  function renderPlanner() { $('#planner-list').innerHTML = state.jobs.map(jobCard).join('') || '<div class="empty"><strong>No jobs yet</strong><p>Create one, or import a maintenance schedule.</p></div>'; }
   async function renderAudit() {
     const { data } = await sb.from('audit_log').select('*').order('created_at', { ascending: false }).limit(200);
     $('#audit-list').innerHTML = (data || []).map((a) =>
@@ -600,6 +731,51 @@
       $('#pbi-frame-wrap').innerHTML = '<div class="empty">No Power BI embed configured yet.</div>';
     }
   }
+  function slugTrade(label, used) {
+    const base = String(label || 'Trade').replace(/[^A-Za-z0-9]+/g, '') || 'Trade';
+    if (!used.has(base)) return base;
+    let n = 2;
+    while (used.has(base + n)) n += 1;
+    return base + n;
+  }
+  function readTradeDraftFromDom() {
+    const rows = $$('#adm-trades .trade-edit');
+    if (!rows.length) return;
+    state.tradeDraft = rows.map((row, i) => ({
+      id: state.tradeDraft?.[i]?.id || '',
+      label: ($('[data-k=label]', row).value || '').trim() || 'Trade',
+      short: ($('[data-k=short]', row).value || '').trim().toUpperCase().slice(0, 6) || 'T',
+      color: $('[data-k=color]', row).value || '#334155',
+      active: !!$('[data-k=active]', row).checked,
+    }));
+  }
+  function renderTradeAdmin() {
+    const host = $('#adm-trades');
+    if (!host) return;
+    if (!state.tradeDraft) state.tradeDraft = getTrades().map((t) => ({ ...t }));
+    if (host.contains(document.activeElement)) return;
+    host.innerHTML = state.tradeDraft.map((t, i) =>
+      '<div class="trade-edit" data-i="' + i + '"><span class="trade-swatch" style="background:' + esc(t.color) + '"></span>' +
+      '<input class="input" data-k="label" aria-label="Trade name" value="' + esc(t.label) + '" />' +
+      '<input class="input" data-k="short" aria-label="Short code" maxlength="6" value="' + esc(t.short) + '" />' +
+      '<input data-k="color" type="color" aria-label="Colour" value="' + ((/^#[0-9a-fA-F]{6}$/.test(t.color || '')) ? t.color : '#334155') + '" />' +
+      '<label><input data-k="active" type="checkbox" ' + (t.active ? 'checked' : '') + ' /> Active</label>' +
+      '<button type="button" class="btn btn-sm" data-move="up"' + (i === 0 ? ' disabled' : '') + '>Up</button>' +
+      '<button type="button" class="btn btn-sm" data-move="down"' + (i === state.tradeDraft.length - 1 ? ' disabled' : '') + '>Down</button></div>'
+    ).join('');
+  }
+  function tradesForSave() {
+    if ($('#adm-trades')?.children.length) readTradeDraftFromDom();
+    const draft = state.tradeDraft && state.tradeDraft.length ? state.tradeDraft : getTrades();
+    const used = new Set();
+    return draft.map((t) => {
+      let id = String(t.id || '').trim();
+      if (!id || used.has(id)) id = slugTrade(t.label, used);
+      used.add(id);
+      const color = /^#[0-9a-fA-F]{6}$/.test(t.color || '') ? t.color : '#334155';
+      return { id, label: t.label || id, short: String(t.short || id).slice(0, 6).toUpperCase(), color, active: t.active !== false };
+    });
+  }
   function renderAdmin() {
     const tpl = state.settings?.url_templates || {};
     $('#adm-sap').value = tpl.sap || '';
@@ -617,6 +793,7 @@
     if (sitesEl) sitesEl.value = formatSites(getSites());
     const mapEl = $('#adm-unit-map');
     if (mapEl) mapEl.value = formatUnitPatterns(getUnitPatterns());
+    renderTradeAdmin();
     $('#adm-tiles').innerHTML = state.tiles.map((t, i) =>
       '<div class="tile-edit" data-i="' + i + '"><input class="input" data-k="icon" value="' + esc(t.icon || '') + '" /><input class="input" data-k="name" value="' + esc(t.name || '') + '" /><input class="input" data-k="url" value="' + esc(t.url || '') + '" placeholder="https://…" /><input class="input" data-k="description" value="' + esc(t.description || '') + '" style="grid-column:1/-1" /></div>'
     ).join('');
@@ -888,19 +1065,22 @@
       '<div>Live permit status unavailable. Do not treat as approved. Configure Permit Vision via Shell IT (see INTEGRATIONS.md).</div></div>' +
       '<p class="permit-status-note">External permit status is informational only. Grey/warning means not validated — never treat as approved.</p>' +
       '<section class="section-block"><h3>Overview / permit</h3>' + commentBox((job.comments || []).filter((c) => commentSection(c) === 'overview'), 'data-section="overview"') + '</section>' +
-      '<div class="modal-actions" style="margin:12px 0">' +
-      (job.on_hold ? '<button class="btn btn-success btn-sm" data-act="clear-hold">Clear hold</button>' : '<button class="btn btn-danger btn-sm" data-act="hold">Flag on hold</button>') +
-      (canPlan ? '<button class="btn btn-sm" data-act="edit">Edit job</button><button class="btn btn-sm" data-act="archive">Archive</button>' : '') +
-      '</div><h3 style="margin-bottom:8px">Trade steps</h3><div class="step-list">' +
+      '<h3 style="margin-bottom:8px">Trade steps</h3><div class="step-list">' +
       job.steps.map((s) => stepHtml(s, job)).join('') +
       '</div><section class="section-block"><h3>Operators</h3>' + commentBox((job.comments || []).filter((c) => commentSection(c) === 'operators'), 'data-section="operators"') + '</section>' +
       '<section class="section-block"><h3>General</h3>' + commentBox((job.comments || []).filter((c) => commentSection(c) === 'general'), 'data-section="general"') + '</section>' +
       ((job.status === 'done' || job.completed_at)
-        ? '<div class="complete-banner">Job complete' + (job.completed_by ? ' · ' + esc(job.completed_by) : '') + (job.completed_at ? ' · ' + fmtTime(job.completed_at) : '') + '</div><button type="button" class="btn btn-block" id="job-reopen">Reopen job</button>'
-        : '<button type="button" class="btn btn-primary btn-block job-complete" id="job-complete">Job complete</button>') +
+        ? '<div class="complete-banner">Job complete' + (job.completed_by ? ' · ' + esc(job.completed_by) : '') + (job.completed_at ? ' · ' + fmtTime(job.completed_at) : '') + '</div>'
+        : '') +
       '<h3 style="margin-top:20px">Audit trail</h3><div class="audit-list">' +
       (job.audit || []).slice(0, 40).map((a) => '<div class="audit-item"><div class="t">' + fmtTime(a.created_at) + ' · ' + esc(a.actor_name || '') + '</div><div><strong>' + esc(a.action) + '</strong> ' + esc(a.detail || '') + '</div></div>').join('') +
-      '</div></div></div></div>';
+      '</div></div><div class="modal-dock">' +
+      (job.on_hold ? '<button class="btn btn-success btn-sm" data-act="clear-hold">Clear hold</button>' : '<button class="btn btn-danger btn-sm" data-act="hold">Flag on hold</button>') +
+      (canPlan ? '<button class="btn btn-sm" data-act="edit">Edit job</button><button class="btn btn-sm" data-act="archive">Archive</button>' : '') +
+      ((job.status === 'done' || job.completed_at)
+        ? '<button type="button" class="btn btn-block" id="job-reopen">Reopen job</button>'
+        : '<button type="button" class="btn btn-primary btn-block job-complete" id="job-complete">Job complete</button>') +
+      '</div></div></div>';
 
     $$('[data-utl]', root).forEach((btn) => { btn.onclick = () => copyText(buildUtlLog(job, { notes: btn.dataset.utl })); });
     $$('[data-copy-comment]', root).forEach((btn) => {
@@ -1032,7 +1212,7 @@
       if (open.length) {
         const reason = await chooseDialog({
           title: 'Steps still open',
-          messageHtml: '<p>These steps are still open. Mark them skipped, or cancel.</p>' + open.map((s) => '<div>• ' + esc(s.label) + ' (' + esc(s.trade) + ')</div>').join(''),
+          messageHtml: '<p>These steps are still open. Mark them skipped, or cancel.</p>' + open.map((s) => '<div>• ' + esc(s.label) + ' (' + esc(tradeLabel(s.trade)) + ')</div>').join(''),
           picks: ['Already done', 'Not required', 'Done by another crew'],
           allowEmpty: true,
           okLabel: 'Mark them skipped and complete',
@@ -1143,7 +1323,7 @@
       ? '<div class="skip-banner">Skipped' + (s.skipped_by ? ' · ' + esc(s.skipped_by) : '') + (s.skipped_at ? ' · ' + fmtTime(s.skipped_at) : '') + (s.skip_reason ? ' — ' + esc(s.skip_reason) : '') + '</div><button type="button" class="btn btn-sm" data-unskip="' + s.id + '">Undo skip</button>'
       : '<button type="button" class="btn btn-sm" data-skip="' + s.id + '">Skip / Already complete</button>';
     const active = s.status === 'ready' || s.status === 'in_progress';
-    return '<div class="step-row ' + s.status + '"><div class="step-head"><div class="step-label">' + esc(s.label) + ' <span class="chip">' + esc(s.trade) + '</span></div><div class="chip' + (skipped ? ' skip' : '') + '">' + (skipped ? 'Skipped' : esc(String(s.status).replaceAll('_', ' '))) + '</div></div>' +
+    return '<div class="step-row ' + s.status + '"><div class="step-head"><div class="step-label">' + esc(s.label) + ' <span class="chip" style="--tc:' + esc(tradeColor(s.trade)) + ';border-color:var(--tc)">' + esc(tradeLabel(s.trade)) + '</span></div><div class="chip' + (skipped ? ' skip' : '') + '">' + (skipped ? 'Skipped' : esc(String(s.status).replaceAll('_', ' '))) + '</div></div>' +
       crewPanel(s, active) +
       beamStepHtml(s) +
       (people ? '<div class="assignees">' + people + '</div>' : '') + skipControl + commentBox(notes, 'data-step="' + s.id + '"') + '</div>';
@@ -1199,7 +1379,7 @@
 
   function defaultAssignees(trade) {
     const peeps = state.people.filter((p) => p.trade === trade);
-    return peeps.length ? peeps.map((p) => ({ person_id: p.id, person_name: p.name })) : [{ person_name: trade + ' crew' }];
+    return peeps.length ? peeps.map((p) => ({ person_id: p.id, person_name: p.name })) : [{ person_name: tradeLabel(trade) + ' crew' }];
   }
 
   function openJobEditor(existing) {
@@ -1228,14 +1408,14 @@
         '<div><label class="lbl">Equipment location</label><input class="input" id="f-loc" placeholder="Area / elevation / grid" value="' + esc(existing?.equipment_location || '') + '" /></div>' +
         '<div style="grid-column:1/-1"><label class="lbl">Description</label><textarea class="textarea" id="f-desc">' + esc(existing?.description || '') + '</textarea></div></div>' +
         '<label class="lbl">Quick templates</label><div class="template-row">' + Object.entries(TEMPLATES).map(([k, v]) => '<button type="button" class="btn btn-sm" data-tpl="' + k + '">' + esc(v.name) + '</button>').join('') + '</div>' +
-        '<label class="lbl">Tap trades to build sequence</label><div class="trade-chips">' + TRADES.map((t) => '<button type="button" class="trade-chip" data-trade="' + t.id + '">+ ' + esc(t.label) + '</button>').join('') +
+        '<label class="lbl">Tap trades to build sequence</label><div class="trade-chips">' + activeTrades().map((t) => '<button type="button" class="trade-chip" data-trade="' + t.id + '" style="--tc:' + esc(t.color) + '"><span class="trade-dot"></span>' + esc(t.short) + ' ' + esc(t.label) + '</button>').join('') +
         '<label style="display:flex;align-items:center;gap:8px;margin-left:8px"><input type="checkbox" id="f-reverse" ' + (addReverse ? 'checked' : '') + ' /> Add reverse steps</label></div>' +
         '<div id="step-editor"></div><button class="btn btn-primary btn-block" id="save-job" style="margin-top:16px">' + (existing ? 'Save changes' : 'Create job') + '</button></div></div></div>';
       $('#step-editor').innerHTML = steps.map((s, i) => '<div class="step-row" style="margin-top:8px"><div class="step-head"><strong>' + (i + 1) + '. ' + esc(s.label) + '</strong><div style="display:flex;gap:4px">' +
         '<button class="btn btn-sm" data-up="' + i + '" ' + (i === 0 ? 'disabled' : '') + '>↑</button><button class="btn btn-sm" data-down="' + i + '" ' + (i === steps.length - 1 ? 'disabled' : '') + '>↓</button><button class="btn btn-sm btn-danger" data-del="' + i + '">✕</button></div></div>' +
         '<input class="input" data-label="' + i + '" value="' + esc(s.label) + '" /></div>').join('') || '<div class="empty">Add trades or pick a template</div>';
       $$('[data-tpl]', root).forEach((b) => b.onclick = () => { steps = TEMPLATES[b.dataset.tpl].steps.map((s) => ({ ...s, assignees: defaultAssignees(s.trade) })); maybeReverse(); renderEditor(); });
-      $$('.trade-chip', root).forEach((b) => b.onclick = () => { const trade = b.dataset.trade; steps.push({ trade, label: trade + ' — work', assignees: defaultAssignees(trade) }); maybeReverse(); renderEditor(); });
+      $$('.trade-chip', root).forEach((b) => b.onclick = () => { const trade = b.dataset.trade; steps.push({ trade, label: tradeLabel(trade) + ' — work', assignees: defaultAssignees(trade) }); maybeReverse(); renderEditor(); });
       $('#f-reverse').onchange = (e) => { addReverse = e.target.checked; maybeReverse(true); renderEditor(); };
       function maybeReverse() { steps = steps.filter((s) => !s._rev); if (addReverse) { const base = steps.slice(); steps = base.concat(base.slice().reverse().map((s) => ({ trade: s.trade, label: s.trade + ' — reinstate / close', assignees: defaultAssignees(s.trade), _rev: true }))); } }
       $$('[data-up]', root).forEach((b) => b.onclick = () => { const i = +b.dataset.up; [steps[i - 1], steps[i]] = [steps[i], steps[i - 1]]; renderEditor(); });
@@ -1381,15 +1561,27 @@
     const parts = String(floc || '').split(/[-./]/).map((s) => s.trim()).filter(Boolean);
     return parts.length ? parts[parts.length - 1] : '';
   }
+  function beamToken(text, word) {
+    return new RegExp('(^|[^A-Z0-9])' + word + '([^A-Z0-9]|$)').test(text);
+  }
   function classifyBeamTrade(workCenter, lead) {
     const wc = String(workCenter || '').toUpperCase();
     const ld = String(lead || '').toUpperCase();
-    const code = (wc.split(/[^A-Z0-9]+/).filter(Boolean).pop() || wc);
-    const text = wc + ' ' + ld;
-    if (code === 'ELE' || /\bELECTR/.test(text)) return { trade: 'Electrician', known: true };
-    if (code === 'INS' || /INSUL/.test(text)) return { trade: 'Insulator', known: true };
-    if (['PIP', 'FIT', 'MEC'].includes(code) || /PIPE\s*FIT|PIPEFIT/.test(text)) return { trade: 'Pipefitter', known: true };
-    if (code === 'NDE' || code === 'INSP' || /\bINSPECT/.test(text)) return { trade: 'NDE', known: true };
+    const code = (wc.split(/[^A-Z0-9]+/).filter(Boolean).pop() || '');
+    const text = (wc + ' ' + ld).replace(/\s+/g, ' ');
+    const known = (trade) => ({ trade, known: true });
+    if (code === 'INST' || code === 'INSTR' || /INSTR/.test(text)) return known('Instrumentation');
+    if (code === 'INS' || /INSUL/.test(text)) return known('Insulator');
+    if (code === 'HVAC' || beamToken(text, 'HVAC')) return known('HVAC');
+    if (code === 'ELE' || /ELECTR/.test(text)) return known('Electrician');
+    if (['PIP', 'FIT', 'MEC'].includes(code) || /PIPE\s*FIT|PIPEFIT/.test(text)) return known('Pipefitter');
+    if (code === 'NDE' || code === 'INSP' || /INSPECT/.test(text)) return known('NDE');
+    if (code === 'BM' || code === 'BLR' || beamToken(text, 'BOILER')) return known('Boilermaker');
+    if (['SCAF', 'SCAFF', 'SCF', 'SCA'].includes(code) || /SCAFF/.test(text)) return known('Scaffold');
+    if (code === 'CRN' || code === 'CRANE' || beamToken(text, 'CRANE')) return known('Crane');
+    if (code === 'LBR' || beamToken(text, 'LABOUR') || beamToken(text, 'LABOR')) return known('Labourer');
+    if (code === 'VAC' || beamToken(text, 'HYDROVAC') || /VAC\s*TRUCK/.test(text)) return known('VacTruck');
+    if (code === 'TEAM' || code === 'STEAM' || code === 'STM' || beamToken(text, 'STEAM') || beamToken(text, 'TEAM')) return known('Team');
     const words = String(lead || '').replace(/\s+/g, ' ').trim().split(' ').filter((w) => !/^SCT-/i.test(w) && !/^[A-Z0-9]{2,5}-[A-Z0-9]{2,5}$/i.test(w));
     let name = words.join(' ').replace(/\s*-\s*FACILITIES.*/i, '').trim();
     if (name === name.toUpperCase() && name) name = name.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
@@ -1442,7 +1634,7 @@
       const candidate = detectBeamColumns(matrix[i] || []);
       if (beamHeaderScore(candidate) >= 3) { headerRow = i; map = candidate; break; }
     }
-    if (headerRow < 0) return { error: 'Could not find the Beam header row. Expected columns such as Activity ID and Order Short Text.' };
+    if (headerRow < 0) return { error: 'Could not find the maintenance schedule header row. Expected columns such as Activity ID and Order Short Text.' };
     let remembered = false;
     try {
       const saved = JSON.parse(localStorage.getItem('bl_beam_map') || 'null');
@@ -1569,12 +1761,12 @@
         if (error) throw error;
         jobId = data.id;
         created++;
-        await audit(jobId, 'job_created', 'Beam import ' + order.orderNo);
+        await audit(jobId, 'job_created', 'Maintenance schedule ' + order.orderNo);
       } else {
         const { error } = await sb.from('jobs').update(jobPatch).eq('id', found.id);
         if (error) throw error;
         updated++;
-        await audit(found.id, 'beam_import', 'Updated from Beam sheet');
+        await audit(found.id, 'schedule_import', 'Updated from maintenance schedule');
       }
       const have = new Map((found?.steps || []).map((s) => [String((s.beam || {}).operation || ''), s]).filter(([k]) => k));
       for (const step of order.steps) {
@@ -1612,9 +1804,9 @@
   function openBeamImport() {
     const root = $('#modal-root');
     let parsed = null;
-    root.innerHTML = '<div class="overlay"><div class="modal"><div class="modal-head"><strong>Import Beam sheet</strong><button class="btn btn-sm" id="close-beam">Close</button></div><div class="modal-body">' +
+    root.innerHTML = '<div class="overlay"><div class="modal"><div class="modal-head"><strong>Import maintenance schedule</strong><button class="btn btn-sm" id="close-beam">Close</button></div><div class="modal-body">' +
       '<p style="color:var(--muted);margin-top:0">Drop the planning export here, or choose a file. .xlsx, .xls, and .csv. Columns are detected automatically. Re-import updates the same orders and does not touch sign-offs, comments, photos, skips, permit holders, or radio channels.</p>' +
-      '<div class="dropzone" id="beam-drop">Drop the Beam export here, or tap to choose</div>' +
+      '<div class="dropzone" id="beam-drop">Drop the maintenance schedule here, or tap to choose</div>' +
       '<input id="beam-file" type="file" accept=".xlsx,.xls,.csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv" style="display:none" />' +
       '<div id="beam-summary"></div></div></div></div>';
     const drop = $('#beam-drop');
@@ -1640,7 +1832,7 @@
           $('#beam-go').disabled = true;
           try {
             const result = await commitBeamImport(parsed);
-            const ds = { ...(state.settings?.data_source || {}), beam_header_map: { map: parsed.map, at: new Date().toISOString() }, adapter: 'excel', label: 'Beam planning export → Supabase', lastUpdated: new Date().toISOString() };
+            const ds = { ...(state.settings?.data_source || {}), beam_header_map: { map: parsed.map, at: new Date().toISOString() }, adapter: 'excel', label: 'Maintenance schedule → Supabase', lastUpdated: new Date().toISOString() };
             await sb.from('app_settings').upsert({ id: 'default', data_source: ds, updated_at: new Date().toISOString() });
             await loadMeta();
             toast(result.created + ' new, ' + result.updated + ' updated');
@@ -1728,24 +1920,27 @@
 
   function bind() {
     $('#main-tabs').onclick = (e) => { const t = e.target.closest('.tab'); if (t) setView(t.dataset.view); };
-    $('#search').oninput = (e) => { state.filters.q = e.target.value; renderJobList(); };
-    $('#filter-status').onchange = (e) => { state.filters.status = e.target.value; renderJobList(); };
-    $('#filter-priority').onchange = (e) => { state.filters.priority = e.target.value; renderJobList(); };
+    const setFilter = (key, value) => { state.filters[key] = value; rememberFilters(); renderJobList(); };
+    $('#search').oninput = (e) => setFilter('q', e.target.value);
+    $('#filter-status').onchange = (e) => setFilter('status', e.target.value);
+    $('#filter-priority').onchange = (e) => setFilter('priority', e.target.value);
+    if ($('#filter-when')) $('#filter-when').onchange = (e) => setFilter('when', e.target.value);
     $('#filter-unit').onchange = (e) => {
       state.filters.unit = e.target.value;
       if (state.filters.unit) {
         const info = puForUnit(state.filters.unit);
         if (info.pu) state.filters.pu = info.pu;
       }
+      rememberFilters();
       renderJobList();
     };
-    $('#filter-trade').onchange = (e) => { state.filters.trade = e.target.value; renderJobList(); };
+    $('#filter-trade').onchange = (e) => setFilter('trade', e.target.value);
     document.addEventListener('click', (e) => {
       const puChip = e.target.closest('[data-pu-tab]');
       if (puChip) {
         const which = puChip.dataset.puTab;
         const pu = puChip.dataset.pu || '';
-        if (which === 'jobs') { state.filters.pu = pu; state.filters.unit = ''; const sel = $('#filter-unit'); if (sel) sel.value = ''; renderJobList(); }
+        if (which === 'jobs') { state.filters.pu = pu; state.filters.unit = ''; const sel = $('#filter-unit'); if (sel) sel.value = ''; rememberFilters(); renderJobList(); }
         else if (which === 'board') { state.boardPu = pu; state.boardUnit = ''; renderBoard(); }
         return;
       }
@@ -1757,6 +1952,7 @@
         state.filters.unit = unit;
         if (unit) { const info = puForUnit(unit); if (info.pu) state.filters.pu = info.pu; }
         const sel = $('#filter-unit'); if (sel) sel.value = unit;
+        rememberFilters();
         renderJobList();
       } else if (which === 'board') {
         state.boardUnit = unit;
@@ -1771,8 +1967,60 @@
     $('#btn-export').onclick = exportExcel;
     $('#btn-audit-refresh').onclick = renderAudit;
     $('#btn-logout').onclick = () => { localStorage.removeItem('bl_user'); location.reload(); };
-    $('#btn-hc').onclick = () => { document.documentElement.classList.toggle('hc'); localStorage.setItem('bl_hc', document.documentElement.classList.contains('hc') ? '1' : '0'); };
-    if (localStorage.getItem('bl_hc') === '1') document.documentElement.classList.add('hc');
+    const applyHc = (on) => {
+      document.documentElement.classList.toggle('hc', !!on);
+      const btn = $('#btn-hc');
+      if (btn) btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    };
+    applyHc(localStorage.getItem('bl_hc') === '1');
+    $('#btn-hc').onclick = () => {
+      const on = !document.documentElement.classList.contains('hc');
+      applyHc(on);
+      localStorage.setItem('bl_hc', on ? '1' : '0');
+    };
+    window.addEventListener('offline', () => setLiveStatus('offline'));
+    window.addEventListener('online', () => { setLiveStatus('reconnecting'); refreshAll(false); });
+    let pullY = null;
+    document.addEventListener('touchstart', (e) => {
+      if (window.scrollY > 8 || document.querySelector('.overlay')) { pullY = null; return; }
+      pullY = e.touches[0].clientY;
+    }, { passive: true });
+    document.addEventListener('touchmove', (e) => {
+      if (pullY == null) return;
+      const hint = $('#pull-hint');
+      if (hint) hint.classList.toggle('hidden', e.touches[0].clientY - pullY < 48);
+    }, { passive: true });
+    document.addEventListener('touchend', (e) => {
+      if (pullY == null) return;
+      const dy = e.changedTouches[0].clientY - pullY;
+      pullY = null;
+      $('#pull-hint')?.classList.add('hidden');
+      if (dy > 72 && window.scrollY <= 8 && !document.querySelector('.overlay')) refreshAll(true);
+    }, { passive: true });
+    const tradeHost = $('#adm-trades');
+    if (tradeHost) {
+      tradeHost.addEventListener('input', () => readTradeDraftFromDom());
+      tradeHost.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-move]');
+        if (!btn || btn.disabled) return;
+        readTradeDraftFromDom();
+        const i = +btn.closest('.trade-edit').dataset.i;
+        const j = btn.dataset.move === 'up' ? i - 1 : i + 1;
+        if (!state.tradeDraft || j < 0 || j >= state.tradeDraft.length) return;
+        const tmp = state.tradeDraft[i];
+        state.tradeDraft[i] = state.tradeDraft[j];
+        state.tradeDraft[j] = tmp;
+        if (document.activeElement) document.activeElement.blur();
+        renderTradeAdmin();
+      });
+    }
+    if ($('#adm-trade-add')) $('#adm-trade-add').onclick = () => {
+      if (!state.tradeDraft) state.tradeDraft = getTrades().map((t) => ({ ...t }));
+      readTradeDraftFromDom();
+      state.tradeDraft.push({ id: '', label: 'New trade', short: 'NEW', color: '#334155', active: true });
+      if (document.activeElement) document.activeElement.blur();
+      renderTradeAdmin();
+    };
     $('#btn-notify').onclick = async () => {
       if (!('Notification' in window)) return toast('Notifications not available in this browser');
       try {
@@ -1793,7 +2041,7 @@
         const parsedSites = parseSites($('#adm-sites')?.value || '');
         const sites = parsedSites.length ? parsedSites : cloneSites(DEFAULT_SITES);
         const unitPatterns = parseUnitPatterns($('#adm-unit-map')?.value || '');
-        const ds = { ...(state.settings?.data_source || {}), units, sites, unit_patterns: unitPatterns.length ? unitPatterns : DEFAULT_UNIT_PATTERNS.map((p) => ({ ...p })), adapter: state.settings?.data_source?.adapter || 'supabase', label: state.settings?.data_source?.label || 'Supabase (Beamlock)' };
+        const ds = { ...(state.settings?.data_source || {}), units, sites, trades: tradesForSave(), unit_patterns: unitPatterns.length ? unitPatterns : DEFAULT_UNIT_PATTERNS.map((p) => ({ ...p })), adapter: state.settings?.data_source?.adapter || 'supabase', label: state.settings?.data_source?.label || 'Supabase (Beamlock)' };
         await sb.from('app_settings').upsert({
           id: 'default',
           url_templates: {
@@ -1811,7 +2059,8 @@
           updated_at: new Date().toISOString(),
         });
         for (const t of tiles) await sb.from('app_tiles').upsert(t);
-        await loadMeta(); renderAdmin(); renderApps(); renderDashboards(); toast('Integration settings saved');
+        state.tradeDraft = null;
+        await loadMeta(); renderAdmin(); renderApps(); renderDashboards(); renderTradeFilter(); toast('Integration settings saved');
       } catch (e) { toast(e.message); }
     };
     document.addEventListener('click', (e) => { const card = e.target.closest('.job-card'); if (card && !e.target.closest('button')) openJob(card.dataset.id); });

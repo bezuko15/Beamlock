@@ -44,12 +44,14 @@
         <div>BEAMLOCK<span class="sub">Trade sign-off. Real time.</span></div>
       </div>
       <div class="header-actions">
-        <div class="user-pill"><span class="live-dot" id="live-dot"></span><span id="user-label"></span></div>
-        <button class="btn btn-sm btn-ghost" id="btn-hc">HC</button>
-        <button class="btn btn-sm btn-ghost" id="btn-notify">Notify</button>
-        <button class="btn btn-sm btn-ghost" id="btn-logout">Switch user</button>
+        <div class="user-pill" title="Connection status"><span class="live-dot" id="live-dot"></span><span class="live-label" id="live-label">Live</span><span id="user-label"></span></div>
+        <button class="btn btn-sm header-btn" id="btn-hc" type="button" title="High contrast" aria-pressed="false">High contrast</button>
+        <button class="btn btn-sm header-btn" id="btn-notify" type="button" title="Turn on notifications">Notifications</button>
+        <button class="btn btn-sm header-btn" id="btn-logout" type="button" title="Sign in as someone else">Switch user</button>
       </div>
     </header>
+    <div id="net-banner" class="net-banner hidden" role="status"></div>
+    <div id="pull-hint" class="pull-hint hidden">Release to refresh</div>
     <main class="layout">
       <div class="safety-banner" id="safety-banner">
         <strong>Safety notice:</strong> Sign-offs track work progress only. They do <em>not</em> issue or approve permits and do <em>not</em> authorize isolations or LOTO.
@@ -68,7 +70,7 @@
 
       <section id="view-jobs">
         <div class="filters">
-          <input id="search" class="input" placeholder="Search WO / SAP / PV / tag / unit / PU / FLoc…" />
+          <input id="search" class="input" placeholder="Order number, functional location, tag…" aria-label="Search by order number or functional location" />
           <select id="filter-status" class="select">
             <option value="">All statuses</option>
             <option value="not_started">Not started</option>
@@ -83,12 +85,13 @@
           <select id="filter-unit" class="select">
             <option value="">All units</option>
           </select>
-          <select id="filter-trade" class="select">
+          <select id="filter-trade" class="select" aria-label="Trade">
             <option value="">All trades</option>
-            <option value="Insulator">Insulators</option>
-            <option value="Electrician">Electrical</option>
-            <option value="Pipefitter">Pipefitters</option>
-            <option value="NDE">NDE</option>
+          </select>
+          <select id="filter-when" class="select" aria-label="When">
+            <option value="">Any date</option>
+            <option value="today">Today</option>
+            <option value="week">This week</option>
           </select>
           <button class="btn btn-sm" id="btn-refresh">Refresh</button>
         </div>
@@ -113,8 +116,8 @@
       <section id="view-planner" class="hidden">
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px">
           <button class="btn btn-primary" id="btn-new-job">+ New job</button>
-          <button class="btn btn-primary" id="btn-beam-import">Import Beam sheet</button>
-          <a class="btn" href="./sample/beam-sample.xlsx" download>Download Beam sample</a>
+          <button class="btn btn-primary" id="btn-beam-import">Import maintenance schedule</button>
+          <a class="btn" href="./sample/beam-sample.xlsx" download="maintenance-schedule-sample.xlsx">Download maintenance schedule sample</a>
           <button class="btn" id="btn-import">Other Excel / CSV</button>
           <a class="btn" href="./sample/sample-backlog.xlsx" download>Download sample backlog</a>
           <button class="btn" id="btn-export">Export Excel</button>
@@ -171,8 +174,12 @@
         <h3>Process areas</h3>
         <p style="color:var(--muted);margin-top:0">Site / area, then each process unit and its plant units. A site name on its own line, then <code>PU: unit, unit</code>. Jobs take their PU from the unit. Used by filters, the board, import, and export.</p>
         <textarea class="textarea" id="adm-sites" rows="6" placeholder="Upgrader South&#10;PU1: HMU, RHC&#10;PU2: A&amp;V, SRU, COGEN, Waterblock"></textarea>
-        <h3>Beam unit mapping</h3>
-        <p style="color:var(--muted);margin-top:0">Used only by Beam sheet import. One line: <code>pattern = unit</code>. First match wins against plant section, location, GSAP unit, and functional location. Anything else lands on Unassigned.</p>
+        <h3>Trades</h3>
+        <p style="color:var(--muted);margin-top:0">Add, rename, reorder, set the short code, or deactivate. Deactivated trades stay on existing jobs but leave sign-in, filters, and new steps.</p>
+        <div id="adm-trades"></div>
+        <button type="button" class="btn btn-sm" id="adm-trade-add">Add trade</button>
+        <h3>Maintenance schedule unit mapping</h3>
+        <p style="color:var(--muted);margin-top:0">Used by the maintenance schedule import. One line: <code>pattern = unit</code>. First match wins against plant section, location, GSAP unit, and functional location. Anything else lands on Unassigned.</p>
         <textarea class="textarea" id="adm-unit-map" rows="8" placeholder="RHC = RHC&#10;A&amp;V = A&amp;V&#10;AV = A&amp;V&#10;SRU = SRU&#10;COGEN = COGEN&#10;Waterblock = Waterblock&#10;HMU = HMU"></textarea>
         <h3>App tiles</h3>
         <div id="adm-tiles"></div>
