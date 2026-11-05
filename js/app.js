@@ -231,10 +231,11 @@
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i];
       const assignees = step.step_assignees || [];
+      if (step.status === 'skipped') continue;
       const allSigned = assignees.length > 0 && assignees.every((a) => a.signed_off);
       if (allSigned) { await sb.from('steps').update({ status: 'done' }).eq('id', step.id); step.status = 'done'; continue; }
       let previousDone = true;
-      if (i > 0) previousDone = steps[i - 1].status === 'done';
+      if (i > 0) previousDone = steps[i - 1].status === 'done' || steps[i - 1].status === 'skipped';
       const anySigned = assignees.some((a) => a.signed_off);
       let status = 'pending';
       if (!previousDone) status = 'pending';
@@ -246,9 +247,10 @@
     const { data: job } = await sb.from('jobs').select('*').eq('id', jobId).single();
     if (!job) return;
     if (job.on_hold) { await sb.from('jobs').update({ status: 'on_hold', updated_at: new Date().toISOString() }).eq('id', jobId); return; }
+    if (job.completed_at) { await sb.from('jobs').update({ status: 'done', updated_at: new Date().toISOString() }).eq('id', jobId); return; }
     const { data: steps2 } = await sb.from('steps').select('status').eq('job_id', jobId);
     const allDone = steps2.length && steps2.every((s) => s.status === 'done');
-    const anyActive = steps2.some((s) => s.status === 'done' || s.status === 'ready' || s.status === 'in_progress');
+    const anyActive = steps2.some((s) => s.status === 'done' || s.status === 'skipped' || s.status === 'ready' || s.status === 'in_progress');
     let status = 'not_started';
     if (allDone) status = 'done';
     else if (anyActive) status = 'in_progress';
@@ -316,10 +318,10 @@
   function subscribeRealtime() {
     const dot = $('#live-dot');
     const channel = sb.channel('beamlock-live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'jobs' }, () => refreshAll(false))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'steps' }, () => refreshAll(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'jobs' }, () => refreshLive())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'steps' }, () => refreshLive())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'step_assignees' }, async (payload) => {
-        await refreshAll(false);
+        await refreshLive();
         if (payload.eventType === 'UPDATE' && payload.new?.signed_off) {
           // your-turn toast for next trade
           const job = state.jobs.find((j) => j.steps.some((s) => s.assignees.some((a) => a.id === payload.new.id)));
@@ -331,7 +333,7 @@
           }
         }
       })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'comments' }, () => refreshAll(false))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'comments' }, () => refreshLive())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_settings' }, () => loadMeta().then(renderDataSource))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_tiles' }, () => loadMeta().then(() => { if (state.view === 'apps') renderApps(); }))
       .subscribe((status) => {
@@ -346,6 +348,15 @@
     }
   }
 
+  async function refreshLive() {
+    await refreshAll(false);
+    if (document.querySelector('.reason-overlay') || document.querySelector('.lightbox')) return;
+    const typing = document.activeElement && ['TEXTAREA', 'INPUT'].includes(document.activeElement.tagName);
+    const id = document.querySelector('#job-overlay')?.dataset.jobId;
+    if (!id || typing) return;
+    const open = state.jobs.find((j) => j.id === id);
+    if (open) showJobModal(open);
+  }
   async function refreshAll(showErr) {
     try {
       await loadFullJobs();
@@ -712,6 +723,11 @@
       });
     });
     lines.push(signoffs.length ? signoffs.join('\n') : '- none yet');
+    lines.push('', 'Skipped:');
+    const skipped = (job.steps || []).filter((s) => s.status === 'skipped');
+    if (!skipped.length) lines.push('- none');
+    else skipped.forEach((s) => lines.push('- ' + s.trade + ' — ' + s.label + ' — ' + (s.skipped_by || '—') + ' — ' + (s.skipped_at ? fmtEdmonton(s.skipped_at) : '—') + (s.skip_reason ? ' — ' + s.skip_reason : '')));
+    if (job.completed_at) lines.push('', 'Completed: ' + (job.completed_by || '—') + ' — ' + fmtEdmonton(job.completed_at));
     lines.push('', 'Holds:');
     if (job.on_hold || job.hold_reason) {
       lines.push('- ' + (job.hold_reason || 'On hold') + (job.hold_by ? ' — ' + job.hold_by : '') + (job.hold_at ? ' — ' + fmtEdmonton(job.hold_at) : ''));
@@ -720,10 +736,39 @@
     if (only) comments = [only];
     else if (notesMode === 'today') comments = comments.filter((c) => edmontonParts(c.created_at)?.dayKey === now.dayKey);
     comments.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+    const noteLine = (c) => '- ' + fmtEdmonton(c.created_at) + ' — ' + (c.author_name || '—') + ' — ' + (c.author_role || '—') + ' — ' + (c.body || '');
     lines.push('', only ? 'Note:' : (notesMode === 'today' ? "Today's notes:" : 'Notes:'));
     if (!comments.length) lines.push('- ' + (notesMode === 'today' && !only ? 'none today' : 'none'));
-    else comments.forEach((c) => lines.push('- ' + fmtEdmonton(c.created_at) + ' — ' + (c.author_name || '—') + ' — ' + (c.author_role || '—') + ' — ' + (c.body || '')));
+    else if (only) lines.push(noteLine(comments[0]));
+    else {
+      const groups = [];
+      const pushGroup = (title, items) => { if (items.length) groups.push({ title, items }); };
+      pushGroup('Overview / permit', comments.filter((c) => commentSection(c) === 'overview'));
+      (job.steps || []).forEach((s) => pushGroup(s.label + ' (' + s.trade + ')', comments.filter((c) => c.step_id === s.id)));
+      pushGroup('Operators', comments.filter((c) => commentSection(c) === 'operators'));
+      pushGroup('General', comments.filter((c) => commentSection(c) === 'general'));
+      const claimed = new Set(groups.flatMap((g) => g.items.map((c) => c.id)));
+      pushGroup('Other', comments.filter((c) => !claimed.has(c.id)));
+      if (!groups.length) lines.push('- none');
+      groups.forEach((g) => {
+        lines.push(g.title + ':');
+        g.items.forEach((c) => lines.push(noteLine(c)));
+      });
+    }
     return lines.join('\n');
+  }
+  function commentSection(c) {
+    if (c.step_id) return 'step';
+    if (c.section === 'overview' || c.channel === 'overview') return 'overview';
+    if (c.section === 'operators' || c.channel === 'operators') return 'operators';
+    return 'general';
+  }
+  function commentPhotos(c) {
+    const list = [];
+    const extra = Array.isArray(c.photo_paths) ? c.photo_paths : [];
+    extra.forEach((url) => { if (url && !list.includes(url)) list.push(url); });
+    if (c.photo_path && !list.includes(c.photo_path)) list.unshift(c.photo_path);
+    return list;
   }
   async function copyText(text) {
     try {
@@ -781,7 +826,7 @@
       ? '<a class="btn btn-sm" href="' + esc(utlHref) + '" target="_blank" rel="noopener noreferrer">Open UTL log</a>'
       : disabledBtn('Open UTL log');
 
-    root.innerHTML = '<div class="overlay" id="job-overlay"><div class="modal" role="dialog">' +
+    root.innerHTML = '<div class="overlay" id="job-overlay" data-job-id="' + esc(job.id) + '"><div class="modal" role="dialog">' +
       '<div class="modal-head"><div><div class="wo">' + esc(job.wo_number) + '</div><div class="title" style="margin:0">' + esc(job.title) + '</div>' +
       '<div class="meta" style="margin-top:8px"><span class="chip">' + esc(job.unit) + ' · ' + esc(job.area || '') + '</span>' +
       (place.pu ? '<span class="chip pu">' + esc((place.site ? place.site + ' · ' : '') + place.pu) + '</span>' : '') +
@@ -802,33 +847,39 @@
       '<div class="permit-status unavailable"><strong>UNAVAILABLE</strong> · source: Permit Vision (stub — not connected) · as of ' + fmtTime(new Date().toISOString()) +
       '<div>Live permit status unavailable. Do not treat as approved. Configure Permit Vision via Shell IT (see INTEGRATIONS.md).</div></div>' +
       '<p class="permit-status-note">External permit status is informational only. Grey/warning means not validated — never treat as approved.</p>' +
+      '<section class="section-block"><h3>Overview / permit</h3>' + commentBox((job.comments || []).filter((c) => commentSection(c) === 'overview'), 'data-section="overview"') + '</section>' +
       '<div class="modal-actions" style="margin:12px 0">' +
       (job.on_hold ? '<button class="btn btn-success btn-sm" data-act="clear-hold">Clear hold</button>' : '<button class="btn btn-danger btn-sm" data-act="hold">Flag on hold</button>') +
       (canPlan ? '<button class="btn btn-sm" data-act="edit">Edit job</button><button class="btn btn-sm" data-act="archive">Archive</button>' : '') +
       '</div><h3 style="margin-bottom:8px">Trade steps</h3><div class="step-list">' +
       job.steps.map((s) => stepHtml(s, job)).join('') +
-      '</div><h3>Notes</h3><div class="comment-tabs"><button class="tab active btn-sm" data-channel="trades">Trades</button><button class="tab btn-sm" data-channel="operators">Operators</button></div>' +
-      '<div class="comments" id="comments"></div><form class="comment-form" id="comment-form"><textarea class="textarea" name="body" placeholder="Add a note…" required></textarea>' +
-      '<div class="row"><input type="file" name="photo" accept="image/*" capture="environment" /><button class="btn btn-primary btn-sm" type="submit">Post note</button></div></form>' +
+      '</div><section class="section-block"><h3>Operators</h3>' + commentBox((job.comments || []).filter((c) => commentSection(c) === 'operators'), 'data-section="operators"') + '</section>' +
+      '<section class="section-block"><h3>General</h3>' + commentBox((job.comments || []).filter((c) => commentSection(c) === 'general'), 'data-section="general"') + '</section>' +
+      ((job.status === 'done' || job.completed_at)
+        ? '<div class="complete-banner">Job complete' + (job.completed_by ? ' · ' + esc(job.completed_by) : '') + (job.completed_at ? ' · ' + fmtTime(job.completed_at) : '') + '</div><button type="button" class="btn btn-block" id="job-reopen">Reopen job</button>'
+        : '<button type="button" class="btn btn-primary btn-block job-complete" id="job-complete">Job complete</button>') +
       '<h3 style="margin-top:20px">Audit trail</h3><div class="audit-list">' +
       (job.audit || []).slice(0, 40).map((a) => '<div class="audit-item"><div class="t">' + fmtTime(a.created_at) + ' · ' + esc(a.actor_name || '') + '</div><div><strong>' + esc(a.action) + '</strong> ' + esc(a.detail || '') + '</div></div>').join('') +
       '</div></div></div></div>';
 
-    let channel = 'trades';
-    const renderComments = () => {
-      const items = (job.comments || []).filter((c) => c.channel === channel);
-      $('#comments').innerHTML = items.map((c) => '<div class="comment"><div class="who"><span>' + esc(c.author_name) + ' · ' + esc(c.author_role) + ' · ' + fmtTime(c.created_at) + '</span><button type="button" class="btn btn-sm" data-copy-comment="' + esc(c.id) + '">Copy to UTL log</button></div><div>' + esc(c.body) + '</div>' +
-        (c.photo_path ? '<img src="' + esc(c.photo_path) + '" alt="attachment" />' : '') + '</div>').join('') || '<div class="empty">No notes yet.</div>';
-      $$('[data-copy-comment]', root).forEach((btn) => {
-        btn.onclick = () => {
-          const comment = (job.comments || []).find((c) => c.id === btn.dataset.copyComment);
-          if (comment) copyText(buildUtlLog(job, { onlyComment: comment }));
-        };
-      });
-    };
-    renderComments();
     $$('[data-utl]', root).forEach((btn) => { btn.onclick = () => copyText(buildUtlLog(job, { notes: btn.dataset.utl })); });
-    $$('.comment-tabs .tab', root).forEach((t) => { t.onclick = () => { $$('.comment-tabs .tab', root).forEach((x) => x.classList.remove('active')); t.classList.add('active'); channel = t.dataset.channel; renderComments(); }; });
+    $$('[data-copy-comment]', root).forEach((btn) => {
+      btn.onclick = () => {
+        const comment = (job.comments || []).find((c) => c.id === btn.dataset.copyComment);
+        if (comment) copyText(buildUtlLog(job, { onlyComment: comment }));
+      };
+    });
+    $$('.thumb', root).forEach((img) => {
+      img.onclick = () => {
+        const box = document.createElement('div');
+        box.className = 'overlay lightbox';
+        box.innerHTML = '<img alt="Photo" src="' + esc(img.dataset.full || img.src) + '" /><button type="button" class="btn">Close</button>';
+        const close = () => box.remove();
+        box.querySelector('button').onclick = close;
+        box.addEventListener('click', (e) => { if (e.target === box) close(); });
+        document.body.appendChild(box);
+      };
+    });
     $('#close-modal').onclick = () => { root.innerHTML = ''; };
     $('#job-overlay').onclick = (e) => { if (e.target.id === 'job-overlay') root.innerHTML = ''; };
 
@@ -872,37 +923,164 @@
         await audit(job.id, 'assignee_added', 'Added ' + name); await refreshStepReadiness(job.id); await refreshAll(false); showJobModal(state.jobs.find((j) => j.id === job.id));
       };
     });
-    $('#comment-form').onsubmit = async (e) => {
-      e.preventDefault();
-      const body = e.target.body.value.trim(); const file = e.target.photo.files[0];
-      let photo_path = null;
-      if (file) {
-        try {
-          const blob = await resizeImage(file, 1280);
-          const path = job.id + '/' + Date.now() + '.jpg';
-          const { error } = await sb.storage.from('comment-photos').upload(path, blob, { contentType: 'image/jpeg', upsert: true });
-          if (error) throw error;
-          photo_path = sb.storage.from('comment-photos').getPublicUrl(path).data.publicUrl;
-        } catch (err) { toast('Photo upload failed: ' + err.message); }
+    const reloadJob = async () => { await refreshAll(false); const next = state.jobs.find((j) => j.id === job.id); if (next) showJobModal(next); else root.innerHTML = ''; };
+    $$('[data-skip]', root).forEach((btn) => {
+      btn.onclick = async () => {
+        const step = job.steps.find((s) => s.id === btn.dataset.skip);
+        if (!step) return;
+        const reason = await chooseDialog({ title: 'Skip / Already complete', messageHtml: '<p>' + esc(step.label) + ' (' + esc(step.trade) + ')</p>', picks: ['Already done', 'Not required', 'Done by another crew'], allowEmpty: true, okLabel: 'Skip step' });
+        if (reason === null) return;
+        const now = new Date().toISOString();
+        const { error } = await sb.from('steps').update({ status: 'skipped', skip_reason: reason || null, skipped_by: state.user.name, skipped_at: now }).eq('id', step.id);
+        if (error) return toast(error.message);
+        await audit(job.id, 'step_skipped', step.trade + ' — ' + step.label + (reason ? ' — ' + reason : ''));
+        await refreshStepReadiness(job.id);
+        await reloadJob();
+        toast('Step skipped');
+      };
+    });
+    $$('[data-unskip]', root).forEach((btn) => {
+      btn.onclick = async () => {
+        const step = job.steps.find((s) => s.id === btn.dataset.unskip);
+        if (!step) return;
+        const reason = await chooseDialog({ title: 'Undo skip', messageHtml: '<p>' + esc(step.label) + '</p>', picks: ['Needs to be done', 'Skipped by mistake'], allowEmpty: false, okLabel: 'Undo skip' });
+        if (!reason) return;
+        await sb.from('jobs').update({ completed_by: null, completed_at: null }).eq('id', job.id);
+        const { error } = await sb.from('steps').update({ status: 'pending', skip_reason: null, skipped_by: null, skipped_at: null }).eq('id', step.id);
+        if (error) return toast(error.message);
+        await audit(job.id, 'step_unskipped', step.trade + ' — ' + step.label + ' — ' + reason);
+        await refreshStepReadiness(job.id);
+        await reloadJob();
+        toast('Skip undone');
+      };
+    });
+    $('#job-complete')?.addEventListener('click', async () => {
+      const ok = await chooseDialog({ title: 'Mark this job complete?', messageHtml: '<p>This records who finished it and when, sets the job to Done, and updates the live board.</p>', okLabel: 'Job complete' });
+      if (!ok) return;
+      const fresh = state.jobs.find((j) => j.id === job.id) || job;
+      const open = (fresh.steps || []).filter((s) => s.status !== 'done' && s.status !== 'skipped');
+      if (open.length) {
+        const reason = await chooseDialog({
+          title: 'Steps still open',
+          messageHtml: '<p>These steps are still open. Mark them skipped, or cancel.</p>' + open.map((s) => '<div>• ' + esc(s.label) + ' (' + esc(s.trade) + ')</div>').join(''),
+          picks: ['Already done', 'Not required', 'Done by another crew'],
+          allowEmpty: true,
+          okLabel: 'Mark them skipped and complete',
+        });
+        if (reason === null) return;
+        const note = reason || 'Skipped to complete the job';
+        const now = new Date().toISOString();
+        for (const s of open) {
+          const { error } = await sb.from('steps').update({ status: 'skipped', skip_reason: note, skipped_by: state.user.name, skipped_at: now }).eq('id', s.id);
+          if (error) return toast(error.message);
+          await audit(job.id, 'step_skipped', s.trade + ' — ' + s.label + ' — ' + note);
+        }
       }
-      if (!body && !photo_path) return toast('Comment required');
-      await sb.from('comments').insert({ job_id: job.id, author_name: state.user.name, author_role: state.user.role, channel, body: body || '(photo)', photo_path });
-      await audit(job.id, 'comment', channel + ': ' + (body || '(photo)').slice(0, 80));
-      await sb.from('jobs').update({ updated_at: new Date().toISOString() }).eq('id', job.id);
-      await refreshAll(false); showJobModal(state.jobs.find((j) => j.id === job.id)); toast('Note posted');
-    };
+      const now = new Date().toISOString();
+      const { error } = await sb.from('jobs').update({ status: 'done', on_hold: false, completed_by: state.user.name, completed_at: now, updated_at: now }).eq('id', job.id);
+      if (error) return toast(error.message);
+      await audit(job.id, 'job_completed', state.user.name + ' marked the job complete');
+      await reloadJob();
+      toast('Job complete');
+    });
+    $('#job-reopen')?.addEventListener('click', async () => {
+      const reason = await chooseDialog({ title: 'Reopen job', messageHtml: '<p>The job goes back to in progress.</p>', picks: ['More work found', 'Completed by mistake'], allowEmpty: false, okLabel: 'Reopen job' });
+      if (!reason) return;
+      const now = new Date().toISOString();
+      const { error } = await sb.from('jobs').update({ status: 'in_progress', completed_by: null, completed_at: null, updated_at: now }).eq('id', job.id);
+      if (error) return toast(error.message);
+      await audit(job.id, 'job_reopened', reason);
+      await reloadJob();
+      toast('Job reopened');
+    });
+    $$('form.comment-form', root).forEach((form) => {
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        const body = (form.body?.value || '').trim();
+        const files = [...(form.querySelector('input[type=file]')?.files || [])];
+        let photos = [];
+        if (files.length) {
+          try { photos = await uploadPhotos(job.id, files); }
+          catch (err) { return toast('Photo upload failed: ' + err.message); }
+        }
+        if (!body && !photos.length) return toast('Comment required');
+        const stepId = form.dataset.step || null;
+        const section = stepId ? null : (form.dataset.section || 'general');
+        const { error } = await sb.from('comments').insert({
+          job_id: job.id, author_name: state.user.name, author_role: state.user.role,
+          channel: stepId ? 'step' : section, section, step_id: stepId,
+          body: body || '(photo)', photo_path: photos[0] || null, photo_paths: photos,
+        });
+        if (error) return toast(error.message);
+        const where = stepId ? ((job.steps.find((s) => s.id === stepId)?.label) || 'step') : section;
+        await audit(job.id, 'comment', where + ': ' + (body || '(photo)').slice(0, 80));
+        await sb.from('jobs').update({ updated_at: new Date().toISOString() }).eq('id', job.id);
+        await reloadJob();
+        toast('Comment posted');
+      };
+    });
   }
 
+  function commentCard(c) {
+    const photos = commentPhotos(c).map((url) => '<img class="thumb" src="' + esc(url) + '" data-full="' + esc(url) + '" alt="Photo" />').join('');
+    return '<div class="comment"><div class="who"><span>' + esc(c.author_name) + ' · ' + esc(c.author_role) + ' · ' + fmtTime(c.created_at) + '</span><button type="button" class="btn btn-sm" data-copy-comment="' + esc(c.id) + '">Copy to UTL log</button></div><div>' + esc(c.body) + '</div>' +
+      (photos ? '<div class="comment-photos">' + photos + '</div>' : '') + '</div>';
+  }
+  function commentBox(items, attrs) {
+    return '<div class="comment-thread">' + (items.length ? items.map(commentCard).join('') : '<div class="empty">No comments yet.</div>') +
+      '<form class="comment-form" ' + attrs + '><label class="lbl">Add comment</label><textarea class="textarea" name="body" placeholder="Add a comment…"></textarea>' +
+      '<div class="row"><input type="file" name="photos" accept="image/*" capture="environment" multiple /><button class="btn btn-primary btn-sm" type="submit">Add comment</button></div></form></div>';
+  }
   function stepHtml(s, job) {
     const canSign = !job.on_hold && (s.status === 'ready' || s.status === 'in_progress' || s.status === 'done');
-    return '<div class="step-row ' + s.status + '"><div class="step-head"><div class="step-label">' + esc(s.label) + ' <span class="chip">' + esc(s.trade) + '</span></div><div class="chip">' + esc(String(s.status).replace('_', ' ')) + '</div></div><div class="assignees">' +
-      (s.assignees || []).map((a) => {
-        const mine = state.user && a.person_name.toLowerCase() === state.user.name.toLowerCase();
-        const readyMe = !a.signed_off && canSign && (mine || state.user?.trade === s.trade || ['Planner', 'Supervisor'].includes(state.user?.role));
-        return '<div class="person-sign"><button type="button" class="circle ' + (a.signed_off ? 'signed' : '') + (readyMe ? ' ready-me' : '') + '" data-assignee="' + a.id + '">' + (a.signed_off ? '✓' : '') + '</button>' +
-          '<div class="person-name">' + esc(a.person_name) + '</div><div class="person-time">' + (a.signed_at ? fmtTime(a.signed_at) : 'tap to sign') + '</div></div>';
-      }).join('') +
-      '<button class="btn btn-sm" data-add-person="' + s.id + '">+ person</button></div></div>';
+    const skipped = s.status === 'skipped';
+    const notes = (job.comments || []).filter((c) => c.step_id === s.id);
+    const people = skipped ? '' : (s.assignees || []).map((a) => {
+      const mine = state.user && a.person_name.toLowerCase() === state.user.name.toLowerCase();
+      const readyMe = !a.signed_off && canSign && (mine || state.user?.trade === s.trade || ['Planner', 'Supervisor'].includes(state.user?.role));
+      return '<div class="person-sign"><button type="button" class="circle ' + (a.signed_off ? 'signed' : '') + (readyMe ? ' ready-me' : '') + '" data-assignee="' + a.id + '">' + (a.signed_off ? '✓' : '') + '</button>' +
+        '<div class="person-name">' + esc(a.person_name) + '</div><div class="person-time">' + (a.signed_at ? fmtTime(a.signed_at) : 'tap to sign') + '</div></div>';
+    }).join('') + '<button class="btn btn-sm" data-add-person="' + s.id + '">+ person</button>';
+    const skipControl = skipped
+      ? '<div class="skip-banner">Skipped' + (s.skipped_by ? ' · ' + esc(s.skipped_by) : '') + (s.skipped_at ? ' · ' + fmtTime(s.skipped_at) : '') + (s.skip_reason ? ' — ' + esc(s.skip_reason) : '') + '</div><button type="button" class="btn btn-sm" data-unskip="' + s.id + '">Undo skip</button>'
+      : '<button type="button" class="btn btn-sm" data-skip="' + s.id + '">Skip / Already complete</button>';
+    return '<div class="step-row ' + s.status + '"><div class="step-head"><div class="step-label">' + esc(s.label) + ' <span class="chip">' + esc(s.trade) + '</span></div><div class="chip' + (skipped ? ' skip' : '') + '">' + (skipped ? 'Skipped' : esc(String(s.status).replaceAll('_', ' '))) + '</div></div>' +
+      (people ? '<div class="assignees">' + people + '</div>' : '') + skipControl + commentBox(notes, 'data-step="' + s.id + '"') + '</div>';
+  }
+  function chooseDialog({ title, messageHtml, picks, allowEmpty, okLabel }) {
+    return new Promise((resolve) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'overlay reason-overlay';
+      wrap.innerHTML = '<div class="modal" role="dialog" aria-label="' + esc(title) + '"><div class="modal-head"><strong>' + esc(title) + '</strong><button type="button" class="btn btn-sm" data-x="cancel">Cancel</button></div><div class="modal-body">' +
+        (messageHtml || '') +
+        (picks && picks.length ? '<div class="reason-picks">' + picks.map((p) => '<button type="button" class="btn btn-sm" data-pick="' + esc(p) + '">' + esc(p) + '</button>').join('') + '</div><textarea class="textarea" id="reason-text" placeholder="' + (allowEmpty ? 'Reason (optional)' : 'Reason') + '"></textarea>' : '') +
+        '<div class="modal-actions" style="margin-top:12px"><button type="button" class="btn btn-primary" data-x="ok">' + esc(okLabel || 'OK') + '</button></div></div></div>';
+      document.body.appendChild(wrap);
+      wrap.querySelectorAll('[data-pick]').forEach((b) => b.onclick = () => {
+        wrap.querySelectorAll('[data-pick]').forEach((x) => x.classList.toggle('on', x === b));
+        const ta = wrap.querySelector('#reason-text');
+        if (ta) ta.value = b.dataset.pick;
+      });
+      const finish = (val) => { wrap.remove(); resolve(val); };
+      wrap.querySelector('[data-x="cancel"]').onclick = () => finish(null);
+      wrap.addEventListener('click', (e) => { if (e.target === wrap) finish(null); });
+      wrap.querySelector('[data-x="ok"]').onclick = () => {
+        const text = (wrap.querySelector('#reason-text')?.value || '').trim();
+        if (picks && !allowEmpty && !text) { toast('A reason is required'); return; }
+        finish(picks ? text : true);
+      };
+    });
+  }
+  async function uploadPhotos(jobId, files) {
+    const urls = [];
+    for (const file of files) {
+      const blob = await resizeImage(file, 1280);
+      const path = jobId + '/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.jpg';
+      const { error } = await sb.storage.from('comment-photos').upload(path, blob, { contentType: 'image/jpeg', upsert: false });
+      if (error) throw error;
+      urls.push(sb.storage.from('comment-photos').getPublicUrl(path).data.publicUrl);
+    }
+    return urls;
   }
 
   function resizeImage(file, max) {
