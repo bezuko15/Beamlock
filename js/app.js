@@ -2786,14 +2786,23 @@
     });
   }
   const SAFETY_UNITS = ['RHC', 'HMU', 'A&V', 'SRU', 'COGEN', 'Waterblock'];
+  function normalizeSafety(rows) {
+    return (rows || []).map((row) => {
+      const next = { ...row };
+      if (!String(next.firehall_number || '').trim() && String(next.fireball_number || '').trim()) next.firehall_number = next.fireball_number;
+      delete next.fireball_number;
+      return next;
+    });
+  }
   async function loadSafety() {
     if (!navigator.onLine) {
-      try { state.safety = JSON.parse(localStorage.getItem('bl_safety') || '[]'); } catch { state.safety = []; }
+      try { state.safety = normalizeSafety(JSON.parse(localStorage.getItem('bl_safety') || '[]')); } catch { state.safety = []; }
+      localStorage.setItem('bl_safety', JSON.stringify(state.safety));
       return;
     }
     const { data, error } = await sb.from('unit_safety').select('*');
     if (error) return;
-    state.safety = data || [];
+    state.safety = normalizeSafety(data || []);
     localStorage.setItem('bl_safety', JSON.stringify(state.safety));
   }
   function safetyFor(unit) {
@@ -2821,14 +2830,13 @@
     };
     host.innerHTML = '<article class="safety-card"><h3>' + esc(unit) + '</h3>' +
       '<div class="emerg-row">' +
-      emerg('Fireball number', row?.fireball_number, 'fireball') +
+      emerg('Firehall number', row?.firehall_number, 'firehall') +
       emerg('Security number', row?.security_number, '') +
       emerg('Panel number', row?.panel_number, '') +
       '</div>' +
       '<div><strong>Unit muster point</strong><div>' + (row?.muster_unit ? esc(row.muster_unit) : blank) + '</div></div>' +
       '<div><strong>Site muster point</strong><div>' + (row?.muster_site ? esc(row.muster_site) : blank) + '</div></div>' +
       '<div><strong>Unit phones</strong>' + (phones.length ? phones.map((p) => '<div><a href="tel:' + esc(String(p.number || '').replace(/[^\d+]/g, '')) + '">' + esc(p.name || 'Phone') + ' · ' + esc(p.number || '') + '</a></div>').join('') : '<div>' + blank + '</div>') + '</div>' +
-      '<div><strong>Firehall number</strong><div>' + (row?.firehall_number ? '<a href="tel:' + esc(String(row.firehall_number).replace(/[^\d+]/g, '')) + '">' + esc(row.firehall_number) + '</a>' : blank) + '</div></div>' +
       '<div><strong>Safety showers and eyewash</strong>' + (showers.length ? showers.map((s) => '<div>' + esc(s.id || 'Shower') + ' — ' + esc(s.location || '') + '</div>').join('') : '<div>' + blank + '</div>') + '</div>' +
       '<div><strong>Notes</strong><div>' + (row?.notes ? esc(row.notes) : blank) + '</div></div>' +
       (row?.map_path ? '<img class="thumb" alt="Map" data-raw="' + esc(row.map_path) + '" src="" />' : '<div><strong>Map photo</strong><div>' + blank + '</div></div>') +
@@ -2837,10 +2845,9 @@
         '<label class="lbl">Unit muster point</label><input class="input" name="muster_unit" value="' + esc(row?.muster_unit || '') + '" />' +
         '<label class="lbl">Site muster point</label><input class="input" name="muster_site" value="' + esc(row?.muster_site || '') + '" />' +
         '<label class="lbl">Phones, one per line: name | number</label><textarea class="textarea" name="phones">' + esc(phones.map((p) => (p.name || '') + ' | ' + (p.number || '')).join('\n')) + '</textarea>' +
-        '<label class="lbl">Fireball number</label><input class="input" name="fireball_number" value="' + esc(row?.fireball_number || '') + '" />' +
+        '<label class="lbl">Firehall number</label><input class="input" name="firehall_number" value="' + esc(row?.firehall_number || '') + '" />' +
         '<label class="lbl">Security number</label><input class="input" name="security_number" value="' + esc(row?.security_number || '') + '" />' +
         '<label class="lbl">Panel number</label><input class="input" name="panel_number" value="' + esc(row?.panel_number || '') + '" />' +
-        '<label class="lbl">Firehall number</label><input class="input" name="firehall_number" value="' + esc(row?.firehall_number || '') + '" />' +
         '<label class="lbl">Showers, one per line: ID | location</label><textarea class="textarea" name="showers">' + esc(showers.map((s) => (s.id || '') + ' | ' + (s.location || '')).join('\n')) + '</textarea>' +
         '<label class="lbl">Notes</label><textarea class="textarea" name="notes">' + esc(row?.notes || '') + '</textarea>' +
         '<label class="lbl">Map photo</label><input type="file" name="map" accept="image/*" />' +
@@ -2861,7 +2868,7 @@
         if (up.error) return toast(up.error.message);
         mapPath = 'comment-photos/' + path;
       }
-      const payload = { unit, muster_unit: form.muster_unit.value.trim(), muster_site: form.muster_site.value.trim(), phones: phonesNext, showers: showersNext, firehall_number: form.firehall_number.value.trim(), fireball_number: form.fireball_number.value.trim(), security_number: form.security_number.value.trim(), panel_number: form.panel_number.value.trim(), notes: form.notes.value.trim(), map_path: mapPath, updated_at: new Date().toISOString(), updated_by: state.user.name };
+      const payload = { unit, muster_unit: form.muster_unit.value.trim(), muster_site: form.muster_site.value.trim(), phones: phonesNext, showers: showersNext, firehall_number: form.firehall_number.value.trim(), security_number: form.security_number.value.trim(), panel_number: form.panel_number.value.trim(), notes: form.notes.value.trim(), map_path: mapPath, updated_at: new Date().toISOString(), updated_by: state.user.name };
       const { error } = await sb.from('unit_safety').upsert(payload);
       if (error) return toast(error.message);
       await loadSafety();
