@@ -25,7 +25,7 @@ People cannot change their own role. Role and approval live in a profiles table 
 
 ## Audit
 
-Sign-offs, holds, comments, imports, and role changes write an audit row. The database stamps the actor name and role from the signed-in account. The browser does not get to invent that name.
+Sign-offs, holds, comments, Got it reactions, imports, and role changes write an audit row. The database stamps the actor name and role from the signed-in account. The browser does not get to invent that name. A person can add or remove only their own reaction. A reaction means they understand the item is there. It does not approve the work.
 
 ## Photos
 

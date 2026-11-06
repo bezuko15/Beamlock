@@ -216,7 +216,7 @@
   }
 
   const state = {
-    user: null, people: [], jobs: [], settings: null, tiles: [], view: 'jobs',
+    user: null, people: [], jobs: [], reactions: [], settings: null, tiles: [], view: 'jobs', weather: null,
     filters: { q: '', status: '', priority: '', trade: '', unit: '', pu: '', when: '' }, boardUnit: '', boardPu: '', channels: {}, tradeDraft: null,
   };
 
@@ -266,6 +266,167 @@
       job_id: jobId || null, action, actor_name: state.user?.name, actor_role: state.user?.role, detail: detail || null,
     });
   }
+  function isMyReaction(row) {
+    if (!row) return false;
+    if (state.profile?.id && row.user_id === state.profile.id) return true;
+    return !!(state.demoOn && state.user?.name && row.actor_name === state.user.name);
+  }
+  function reactionsFor(type, id) {
+    return (state.reactions || []).filter((row) => row.target_type === type && row.target_id === id);
+  }
+  function gotItHtml(type, id, jobId) {
+    const rows = reactionsFor(type, id);
+    const mine = rows.some(isMyReaction);
+    const names = rows.map((row) => row.actor_name).filter(Boolean);
+    const who = names.length ? names.join(', ') : 'No one yet';
+    return '<span class="gotit-wrap"><button type="button" class="gotit' + (mine ? ' on' : '') + '" data-react="' + esc(type) + '" data-id="' + esc(id) + '" data-job="' + esc(jobId) + '" aria-pressed="' + (mine ? 'true' : 'false') + '">Got it</button>' +
+      '<button type="button" class="gotit-count" aria-label="Who reacted: ' + esc(who) + '">' + rows.length + '<span class="gotit-who">' + esc(who) + '</span></button></span>';
+  }
+  function paintOpenJob() {
+    const openId = document.querySelector('#job-overlay')?.dataset.jobId;
+    renderAll();
+    if (!openId) return;
+    const job = activeList().find((item) => item.id === openId);
+    if (job) showJobModal(job);
+  }
+  async function toggleReaction(type, id, jobId) {
+    if (!state.user || !type || !id) return;
+    const mine = reactionsFor(type, id).find(isMyReaction);
+    const on = !mine;
+    if (state.demoOn) {
+      state.reactions = reactionsFor(type, id).some(isMyReaction)
+        ? state.reactions.filter((row) => !(row.target_type === type && row.target_id === id && isMyReaction(row)))
+        : (state.reactions || []).concat([{ id: 'demo-r-' + Date.now(), target_type: type, target_id: id, job_id: jobId, user_id: 'demo-me', actor_name: state.user.name, created_at: new Date().toISOString() }]);
+      paintOpenJob();
+      return;
+    }
+    state.reactions = (state.reactions || []).filter((row) => !(row.target_type === type && row.target_id === id && isMyReaction(row)));
+    if (on) state.reactions.push({ id: 'local-' + type + '-' + id, target_type: type, target_id: id, job_id: jobId, user_id: state.profile?.id || null, actor_name: state.user.name, created_at: new Date().toISOString() });
+    paintOpenJob();
+    if (!navigator.onLine) {
+      await queueOffline({ id: 'react-' + type + '-' + id, kind: 'reaction', at: Date.now(), targetType: type, targetId: id, jobId, on });
+      toast(on ? 'Got it saved on this device' : 'Got it removed on this device');
+      return;
+    }
+    const result = on
+      ? await sb.from('reactions').insert({ target_type: type, target_id: id, job_id: jobId })
+      : await sb.from('reactions').delete().eq('target_type', type).eq('target_id', id);
+    if (result.error) {
+      toast(result.error.message);
+      refreshAll(false);
+    }
+  }
+  function windThresholds() {
+    const wind = state.settings?.data_source?.wind || {};
+    const amber = Number(wind.amber);
+    const red = Number(wind.red);
+    return {
+      amber: Number.isFinite(amber) && amber > 0 ? amber : 30,
+      red: Number.isFinite(red) && red > 0 ? red : 40,
+    };
+  }
+  function gustLevel(gust) {
+    const limits = windThresholds();
+    if (gust >= limits.red) return 'red';
+    if (gust >= limits.amber) return 'amber';
+    return '';
+  }
+  function compassDir(deg) {
+    const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+    const n = Number(deg);
+    if (!Number.isFinite(n)) return '';
+    return dirs[Math.round((((n % 360) + 360) % 360) / 45) % 8];
+  }
+  function wxIcon(code) {
+    const n = Number(code);
+    if (n === 0) return '☀';
+    if (n <= 2) return '⛅';
+    if (n === 3) return '☁';
+    if (n <= 48) return '🌫';
+    if (n <= 67) return '🌧';
+    if (n <= 77) return '❄';
+    if (n <= 82) return '🌧';
+    if (n >= 95) return '⛈';
+    return '☁';
+  }
+  function paintWeather(pack) {
+    const btn = $('#wx-chip');
+    if (!btn) return;
+    state.weather = pack || state.weather;
+    const current = pack?.current;
+    if (!current) { btn.textContent = 'Weather …'; return; }
+    const gust = Math.round(Number(current.wind_gusts_10m) || 0);
+    const speed = Math.round(Number(current.wind_speed_10m) || 0);
+    const temp = Math.round(Number(current.temperature_2m) || 0);
+    const dir = compassDir(current.wind_direction_10m);
+    const level = gustLevel(gust);
+    btn.classList.toggle('gust-amber', level === 'amber');
+    btn.classList.toggle('gust-red', level === 'red');
+    const flag = level === 'red' ? ' high' : (level === 'amber' ? ' adv' : '');
+    btn.innerHTML = '<span class="wx-ico" aria-hidden="true">' + wxIcon(current.weather_code) + '</span><span class="wx-main">' + temp + '° ' + speed + ' g' + gust + flag + ' ' + dir + '</span>';
+    const when = pack.fetchedAt ? fmtTime(pack.fetchedAt) : '';
+    btn.title = 'Shell Scotford · updated ' + when;
+    btn.setAttribute('aria-label', 'Shell Scotford, ' + temp + ' degrees, wind ' + speed + ' kilometres per hour, gusts ' + gust + (level ? ', ' + level + ' advisory' : '') + ', from the ' + dir + '. Updated ' + when);
+  }
+  function readWeatherCache() {
+    try { return JSON.parse(localStorage.getItem('bl_weather') || 'null'); } catch { return null; }
+  }
+  async function refreshWeather() {
+    const cached = readWeatherCache();
+    if (cached) paintWeather(cached);
+    if (!navigator.onLine) return;
+    try {
+      const wxUrl = 'https://api.open-meteo.com/v1/forecast?latitude=53.78&longitude=-113.23&current=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m&hourly=temperature_2m,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m&wind_speed_unit=kmh&timezone=America%2FEdmonton&forecast_hours=12';
+      const alertUrl = 'https://api.weather.gc.ca/collections/weather-alerts/items?f=json&lang=en&limit=5&skipGeometry=true&bbox=-113.45,53.68,-113.05,53.90';
+      const [wxRes, alertRes] = await Promise.all([fetch(wxUrl), fetch(alertUrl).catch(() => null)]);
+      if (!wxRes.ok) throw new Error('weather');
+      const wx = await wxRes.json();
+      let alerts = cached?.alerts || [];
+      if (alertRes && alertRes.ok) {
+        const body = await alertRes.json();
+        alerts = (body.features || []).map((feature) => ({
+          name: feature.properties?.alert_name_en || 'Alert',
+          text: String(feature.properties?.alert_text_en || '').replace(/\s+/g, ' ').trim().slice(0, 280),
+        }));
+      }
+      const pack = { fetchedAt: new Date().toISOString(), current: wx.current, hourly: wx.hourly, alerts };
+      localStorage.setItem('bl_weather', JSON.stringify(pack));
+      paintWeather(pack);
+      if (document.querySelector('#wx-sheet')) openWeatherSheet();
+    } catch (_) {
+      if (cached) paintWeather(cached);
+    }
+  }
+  function startWeather() {
+    const cached = readWeatherCache();
+    if (cached) paintWeather(cached);
+    refreshWeather();
+    if (state.wxTimer) return;
+    state.wxTimer = setInterval(refreshWeather, 10 * 60 * 1000);
+  }
+  function openWeatherSheet() {
+    const pack = state.weather || readWeatherCache();
+    const root = $('#modal-root');
+    if (!root || !pack?.current) { toast('Weather is not available yet'); return; }
+    const limits = windThresholds();
+    const current = pack.current;
+    const hours = pack.hourly || {};
+    const rows = (hours.time || []).slice(0, 12).map((time, i) => {
+      const gust = Math.round(Number(hours.wind_gusts_10m?.[i]) || 0);
+      const level = gustLevel(gust);
+      return '<tr><td>' + esc(String(time).slice(11, 16)) + '</td><td>' + Math.round(Number(hours.temperature_2m?.[i]) || 0) + '°</td><td>' + Math.round(Number(hours.wind_speed_10m?.[i]) || 0) + '</td><td class="wx-gust ' + level + '">' + gust + '</td><td>' + esc(compassDir(hours.wind_direction_10m?.[i])) + '</td></tr>';
+    }).join('');
+    const alerts = (pack.alerts || []).map((alert) => '<p><strong>' + esc(alert.name) + '</strong><br>' + esc(alert.text) + '</p>').join('') || '<p>No Environment Canada alerts for this area.</p>';
+    const hadJob = document.querySelector('#job-overlay');
+    root.innerHTML = '<div class="overlay" id="wx-sheet"><div class="modal" role="dialog" aria-label="Shell Scotford weather"><div class="modal-head"><strong>Shell Scotford</strong><button class="btn btn-sm" id="wx-close" type="button">Close</button></div><div class="modal-body wx-sheet">' +
+      '<p>' + wxIcon(current.weather_code) + ' ' + Math.round(current.temperature_2m) + '° · wind ' + Math.round(current.wind_speed_10m) + ' km/h · gusts ' + Math.round(current.wind_gusts_10m) + ' km/h · ' + esc(compassDir(current.wind_direction_10m)) + '</p>' +
+      '<p>Last updated ' + esc(fmtTime(pack.fetchedAt)) + (navigator.onLine ? '' : ' · saved on this device') + '</p>' +
+      '<p class="wx-advisory">Advisory only. Follow site crane and work-at-height procedures. Amber from ' + limits.amber + ' km/h, red from ' + limits.red + ' km/h.</p>' +
+      '<h3>Environment Canada</h3>' + alerts +
+      '<h3>Next 12 hours</h3><div class="table-wrap"><table><thead><tr><th>Time</th><th>Temp</th><th>Wind</th><th>Gust</th><th>Dir</th></tr></thead><tbody>' + rows + '</tbody></table></div></div></div></div>';
+    $('#wx-close').onclick = () => { root.innerHTML = ''; if (hadJob) { const job = activeList().find((item) => item.id === hadJob.dataset.jobId); if (job) showJobModal(job); } };
+    $('#wx-sheet').onclick = (e) => { if (e.target.id === 'wx-sheet') $('#wx-close').click(); };
+  }
 
   async function refreshStepReadiness(jobId) {
     const { error } = await sb.rpc('advance_job', { target_job: jobId });
@@ -276,10 +437,12 @@
     const { data: jobs, error } = await sb.from('jobs').select('*').eq('archived', false).order('updated_at', { ascending: false });
     if (error) throw error;
     const ids = jobs.map((j) => j.id);
-    if (!ids.length) { state.jobs = []; return; }
+    if (!ids.length) { state.jobs = []; state.reactions = []; return; }
     const { data: steps } = await sb.from('steps').select('*, step_assignees(*)').in('job_id', ids).order('sort_order');
     const { data: comments } = await sb.from('comments').select('*').in('job_id', ids).order('created_at');
     const { data: audits } = await sb.from('audit_log').select('*').in('job_id', ids).order('created_at', { ascending: false }).limit(500);
+    const rx = await sb.from('reactions').select('id,target_type,target_id,job_id,user_id,actor_name,created_at').in('job_id', ids);
+    state.reactions = rx.error ? (state.reactions || []) : (rx.data || []);
     state.jobs = jobs.map((j) => ({
       ...j,
       steps: (steps || []).filter((s) => s.job_id === j.id).map((s) => ({ ...s, assignees: s.step_assignees || [] })),
@@ -359,6 +522,7 @@
       .on('postgres_changes', { event: '*', schema: 'public', table: 'turnarounds' }, () => { if (state.view === 'turn') renderTurnaround(); })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'turnaround_jobs' }, () => { if (state.view === 'turn') renderTurnaround(); })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'unit_safety' }, () => loadSafety().then(() => { if (state.view === 'safety') renderSafety(); }))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, () => { if (!state.demoOn) refreshLive(); })
       .subscribe((status) => {
         if (!navigator.onLine) setLiveStatus('offline');
         else setLiveStatus(status === 'SUBSCRIBED' ? 'live' : 'reconnecting');
@@ -588,6 +752,7 @@
     syncFilterControls();
     renderDataSource();
     loadSafety().then(() => { if (state.view === 'safety') renderSafety(); }).catch(() => {});
+    startWeather();
     if (state.channels.main) { try { sb.removeChannel(state.channels.main); } catch (_) {} }
     subscribeRealtime();
     refreshAll(true);
@@ -721,6 +886,7 @@
       (quiet.length ? '<div class="meta quiet">' + quiet.map((t) => '<span class="chip">' + esc(t) + '</span>').join('') + '</div>' : '') +
       '<div class="steps-mini">' + steps + '</div>' +
       (job.on_hold ? '<div style="margin-top:8px;color:var(--red);font-size:13px;font-weight:700">' + esc(job.hold_reason || '') + '</div>' : '') +
+      (job.status === 'done' ? gotItHtml('job', job.id, job.id) : '') +
       '<button type="button" class="btn btn-safety btn-block" data-card-safety="' + esc(job.unit || '') + '">Safety' + (job.unit ? ' · ' + esc(job.unit) : '') + '</button>' +
       '</article>';
   }
@@ -944,6 +1110,9 @@
     if ($('#adm-utl')) $('#adm-utl').value = tpl.utl || '';
     $('#adm-pbi-embed').value = state.settings?.power_bi_embed?.embedUrl || '';
     $('#adm-pbi-title').value = state.settings?.power_bi_embed?.title || 'Maintenance dashboard';
+    const wind = state.settings?.data_source?.wind || {};
+    if ($('#adm-wind-amber')) $('#adm-wind-amber').value = wind.amber || 30;
+    if ($('#adm-wind-red')) $('#adm-wind-red').value = wind.red || 40;
     const unitsEl = $('#adm-units');
     if (unitsEl) unitsEl.value = getUnits().join('\n');
     const sitesEl = $('#adm-sites');
@@ -1270,7 +1439,7 @@
       '</div><section class="section-block"><h3>Operators</h3>' + commentBox((job.comments || []).filter((c) => commentSection(c) === 'operators'), 'data-section="operators"', manage) + '</section>' +
       '<section class="section-block"><h3>General</h3>' + commentBox((job.comments || []).filter((c) => commentSection(c) === 'general'), 'data-section="general"', manage) + '</section>' +
       ((job.status === 'done' || job.completed_at)
-        ? '<div class="complete-banner">Job complete' + (job.completed_by ? ' · ' + esc(job.completed_by) : '') + (job.completed_at ? ' · ' + fmtTime(job.completed_at) : '') + '</div>'
+        ? '<div class="complete-banner">Job complete' + (job.completed_by ? ' · ' + esc(job.completed_by) : '') + (job.completed_at ? ' · ' + fmtTime(job.completed_at) : '') + '<div>' + gotItHtml('job', job.id, job.id) + '</div></div>'
         : '') +
       '<h3 style="margin-top:20px">Audit trail</h3><div class="audit-list">' +
       (job.audit || []).slice(0, 40).map((a) => '<div class="audit-item"><div class="t">' + fmtTime(a.created_at) + ' · ' + esc(a.actor_name || '') + '</div><div><strong>' + esc(a.action) + '</strong> ' + esc(a.detail || '') + '</div></div>').join('') +
@@ -1515,7 +1684,7 @@
     const photos = commentPhotos(c).map((url) => '<img class="thumb" src="' + esc(url) + '" data-full="' + esc(url) + '" data-raw="' + esc(url) + '" alt="Photo" />').join('');
     const audio = c.audio_path ? '<audio class="voice-play" controls data-raw="' + esc(c.audio_path) + '"></audio>' : '';
     return '<div class="comment"><div class="who"><span>' + esc(c.author_name) + ' · ' + esc(c.author_role) + ' · ' + fmtTime(c.created_at) + '</span><button type="button" class="btn btn-sm" data-copy-comment="' + esc(c.id) + '">Copy to UTL log</button></div><div>' + esc(c.body) + '</div>' +
-      (photos ? '<div class="comment-photos">' + photos + '</div>' : '') + audio + '</div>';
+      (photos ? '<div class="comment-photos">' + photos + '</div>' : '') + audio + gotItHtml('comment', c.id, c.job_id) + '</div>';
   }
   function commentBox(items, attrs, allowForm) {
     const Speech = voiceSpeech();
@@ -1570,6 +1739,7 @@
     const active = s.status === 'ready' || s.status === 'in_progress';
     const shown = { ...s, _locked: !act };
     return '<div class="step-row ' + s.status + '"><div class="step-head"><div class="step-label">' + esc(s.label) + ' <span class="chip" style="--tc:' + esc(tradeColor(s.trade)) + ';border-color:var(--tc)">' + esc(tradeLabel(s.trade)) + '</span></div><div class="chip' + (skipped ? ' skip' : '') + '">' + (skipped ? 'Skipped' : esc(String(s.status).replaceAll('_', ' '))) + '</div></div>' +
+      ((s.status === 'done' || skipped) ? gotItHtml('step', s.id, job.id) : '') +
       crewPanel(shown, active) +
       beamStepHtml(s) +
       (people ? '<div class="assignees">' + people + '</div>' : '') + skipControl + commentBox(notes, 'data-step="' + s.id + '"', act) + '</div>';
@@ -2317,7 +2487,11 @@
     const block = (title, rows) => '<h3>' + title + ' (' + rows.length + ')</h3>' + (rows.map((j) => {
       const signs = (j.steps || []).flatMap((s) => (s.assignees || []).filter((a) => a.signed_off).map((a) => s.trade + ': ' + a.person_name));
       const notes = (j.comments || []).slice(-3).map((c) => c.author_name + ': ' + c.body).join(' | ');
-      return '<p><strong>' + esc(j.wo_number) + '</strong> ' + esc(j.title) + ' · ' + esc(j.unit || '') + (j.on_hold ? ' · BLOCKED ' + esc(j.hold_reason || '') : '') + '<br>Signed: ' + esc(signs.join(', ') || '—') + (notes ? '<br>Notes: ' + esc(notes) : '') + '</p>';
+      const jobAck = reactionsFor('job', j.id).map((row) => row.actor_name).filter(Boolean);
+      const stepAck = (j.steps || []).flatMap((step) => reactionsFor('step', step.id).map((row) => step.label + ': ' + row.actor_name));
+      const noteAck = (j.comments || []).flatMap((comment) => reactionsFor('comment', comment.id).map((row) => row.actor_name));
+      const ack = [jobAck.length ? 'Job acknowledged by ' + jobAck.join(', ') : '', stepAck.length ? 'Steps acknowledged by ' + stepAck.join('; ') : '', noteAck.length ? 'Notes acknowledged by ' + [...new Set(noteAck)].join(', ') : ''].filter(Boolean).join('<br>');
+      return '<p><strong>' + esc(j.wo_number) + '</strong> ' + esc(j.title) + ' · ' + esc(j.unit || '') + (j.on_hold ? ' · BLOCKED ' + esc(j.hold_reason || '') : '') + '<br>Signed: ' + esc(signs.join(', ') || '—') + (notes ? '<br>Notes: ' + esc(notes) : '') + (ack ? '<br>' + esc(ack).replaceAll('&lt;br&gt;', '<br>') : '') + '</p>';
     }).join('') || '<p>None.</p>');
     return '<h2>Beamlock shift handover</h2><p>' + esc(new Date().toLocaleString()) + ' · ' + esc(state.user?.name || '') + '</p>' + block('Completed', done) + block('Open', open) + block('Blocked', blocked);
   }
@@ -2371,6 +2545,10 @@
       turnaround_jobs: state.demoJobs.map((j) => ({ job_id: j.id })),
     };
     state.turnaroundId = 'demo-ta';
+    state.reactions = [
+      { id: 'demo-r1', target_type: 'step', target_id: 'demo-hmu-1', job_id: 'demo-hmu', user_id: 'demo-sup', actor_name: 'Demo Supervisor', created_at: new Date().toISOString() },
+      { id: 'demo-r2', target_type: 'comment', target_id: 'demo-c1', job_id: 'demo-sru', user_id: 'demo-op', actor_name: 'Demo Operator', created_at: new Date().toISOString() },
+    ];
   }
   function startDemo() {
     if (!isRealAdmin()) return toast('Demo mode is for admins');
@@ -2537,6 +2715,11 @@
             body: item.body || (audioPath ? '(voice note)' : '(photo)'), author_name: item.name, author_role: item.role, photo_path: photoUrl, photo_paths: photoUrl ? [photoUrl] : [], audio_path: audioPath,
           });
           if (ins.error) break;
+        } else if (item.kind === 'reaction') {
+          const result = item.on
+            ? await sb.from('reactions').insert({ target_type: item.targetType, target_id: item.targetId, job_id: item.jobId })
+            : await sb.from('reactions').delete().eq('target_type', item.targetType).eq('target_id', item.targetId);
+          if (result.error && !/duplicate|unique/i.test(result.error.message || '')) break;
         }
         await new Promise((resolve) => {
           const tx = db.transaction('outbox', 'readwrite');
@@ -2795,6 +2978,7 @@
     $('#demo-play') && ($('#demo-play').onclick = toggleDemoPlay);
     $('#btn-profile') && ($('#btn-profile').onclick = openProfile);
     $('#btn-handover') && ($('#btn-handover').onclick = openHandover);
+    $('#wx-chip') && ($('#wx-chip').onclick = () => openWeatherSheet());
     $('#btn-turn-export') && ($('#btn-turn-export').onclick = () => exportTurnaround('xlsx'));
     $('#btn-turn-csv') && ($('#btn-turn-csv').onclick = () => exportTurnaround('csv'));
     $('#btn-print-security') && ($('#btn-print-security').onclick = () => window.print());
@@ -2873,7 +3057,9 @@
         const parsedSites = parseSites($('#adm-sites')?.value || '');
         const sites = parsedSites.length ? parsedSites : cloneSites(DEFAULT_SITES);
         const unitPatterns = parseUnitPatterns($('#adm-unit-map')?.value || '');
-        const ds = { ...(state.settings?.data_source || {}), units, sites, trades: tradesForSave(), unit_patterns: unitPatterns.length ? unitPatterns : DEFAULT_UNIT_PATTERNS.map((p) => ({ ...p })), adapter: state.settings?.data_source?.adapter || 'supabase', label: state.settings?.data_source?.label || 'Supabase (Beamlock)' };
+        const amber = Number($('#adm-wind-amber')?.value);
+        const red = Number($('#adm-wind-red')?.value);
+        const ds = { ...(state.settings?.data_source || {}), units, sites, trades: tradesForSave(), unit_patterns: unitPatterns.length ? unitPatterns : DEFAULT_UNIT_PATTERNS.map((p) => ({ ...p })), wind: { amber: amber > 0 ? amber : 30, red: red > 0 ? red : 40 }, adapter: state.settings?.data_source?.adapter || 'supabase', label: state.settings?.data_source?.label || 'Supabase (Beamlock)' };
         await sb.from('app_settings').upsert({
           id: 'default',
           url_templates: {
@@ -2892,10 +3078,14 @@
         });
         for (const t of tiles) await sb.from('app_tiles').upsert(t);
         state.tradeDraft = null;
-        await loadMeta(); renderAdmin(); renderApps(); renderDashboards(); renderTradeFilter(); toast('Integration settings saved');
+        await loadMeta(); renderAdmin(); renderApps(); renderDashboards(); renderTradeFilter(); if (state.weather) paintWeather(state.weather); toast('Integration settings saved');
       } catch (e) { toast(e.message); }
     };
     document.addEventListener('click', (e) => {
+      const count = e.target.closest('.gotit-count');
+      if (count) { count.classList.toggle('open'); return; }
+      const react = e.target.closest('[data-react]');
+      if (react) { toggleReaction(react.dataset.react, react.dataset.id, react.dataset.job); return; }
       const safety = e.target.closest('[data-card-safety]');
       if (safety) { state.safetyUnit = safety.dataset.cardSafety || ''; setView('safety'); return; }
       const card = e.target.closest('.job-card');
