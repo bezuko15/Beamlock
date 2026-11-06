@@ -22,7 +22,7 @@ Access is enforced in the database with row-level security, not only by hiding b
 - Five wrong codes lock that account for 15 minutes. A deactivated account is signed out.
 - A signed-in person can change their own sign-in code from Settings. The current code is checked on the server, the same lockout applies, and the new code is saved only through Supabase Auth for that same account. The code is not written into the audit log, preferences, or the device cache. The role does not change, and that device stays signed in.
 
-People cannot change their own role. Role and approval live in a profiles table the user cannot update.
+People cannot change their own role. Role and approval live in a profiles table the user cannot update. Personal display preferences (theme, text, time zone, alerts) are stored per account. A person can read and update only their own row. Those preferences do not change jobs or site setup.
 
 ## Audit
 

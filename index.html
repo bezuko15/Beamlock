@@ -68,7 +68,7 @@
         <div class="user-pill" title="Connection status"><span class="live-dot" id="live-dot"></span><span class="live-label" id="live-label">Live</span><span id="user-label"></span></div>
         <button class="btn btn-sm header-btn" id="btn-hc" type="button" title="High contrast" aria-pressed="false">High contrast</button>
         <button class="btn btn-sm header-btn hidden" id="btn-demo" type="button" title="Presentation demo">Demo</button>
-        <button class="btn btn-sm header-btn" id="btn-profile" type="button" title="Your profile and alerts">Profile <span id="sync-count" class="badge hidden">0</span></button>
+        <button class="btn btn-sm header-btn" id="btn-profile" type="button" title="Your settings">Profile <span id="sync-count" class="badge hidden">0</span></button>
         <button class="btn btn-sm header-btn" id="btn-notify" type="button" title="Turn on notifications">Notifications</button>
         <label class="header-actas hidden" id="act-as-wrap" title="Operator view">View as
           <select id="act-as" aria-label="View as"></select>
@@ -107,6 +107,7 @@
         <button class="tab hidden" id="tab-dash" data-view="dash">Dashboard</button>
         <button class="tab hidden" id="tab-turn" data-view="turn">Turnaround</button>
         <button class="tab" data-view="safety"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2.2 20 5.2v6.2c0 4.7-3.2 8-8 9.6-4.8-1.6-8-4.9-8-9.6V5.2L12 2.2z"/></svg> Safety</button>
+        <button class="tab" data-view="settings">Settings</button>
         <button class="tab" data-view="planner" id="tab-planner">Planner</button>
         <button class="tab" data-view="dashboards">Dashboards</button>
         <button class="tab" data-view="audit">Audit</button>
@@ -283,6 +284,12 @@
         <div id="safety-body"></div>
       </section>
 
+      <section id="view-settings" class="hidden">
+        <h2 style="margin-top:0">Settings</h2>
+        <p class="settings-lead">These choices are only for your account. They do not change jobs, roles, or site setup.</p>
+        <div id="settings-body"></div>
+      </section>
+
       <section id="view-security" class="hidden security-page">
         <h2>Security and privacy</h2>
         <p>Beamlock tracks work progress. It does not issue permits, approve permits, or authorize isolations or LOTO.</p>
@@ -290,7 +297,7 @@
         <h3>Where the data is</h3>
         <p>Jobs, accounts, and photos are in a Supabase project in Canada (<code>ca-central-1</code>). The site itself is static files. The browser uses only the public anon key. The service-role key is not in this site.</p>
         <h3>Who can change what</h3>
-        <p>The database enforces this with row-level security. A trade account can sign off and comment on that trade only. Planner, Supervisor, and Admin accounts that are still waiting for approval can read and cannot write. An operator can view as any role except Admin, and the audit log says so. From Settings, you can change your own sign-in code. That does not change your role, and you cannot change someone else's code.</p>
+        <p>The database enforces this with row-level security. A trade account can sign off and comment on that trade only. Planner, Supervisor, and Admin accounts that are still waiting for approval can read and cannot write. An operator can view as any role except Admin, and the audit log says so. From Settings, you can change your own sign-in code and your own display preferences. That does not change your role, someone else's code, or shared jobs.</p>
         <h3>Audit and lockout</h3>
         <p>Sign-offs, holds, comments, reactions, and account changes are written to the audit log. The database stamps the name from the signed-in account. A reaction is stored as you, and you can take it off. It does not approve the work. Five wrong codes lock that account for 15 minutes. Changing your sign-in code uses that same lockout. The audit row says the code changed, not what it is.</p>
         <h3>Photos and alerts</h3>

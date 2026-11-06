@@ -217,7 +217,7 @@
 
   const state = {
     user: null, people: [], jobs: [], reactions: [], settings: null, tiles: [], view: 'jobs', weather: null, adminPreview: '', explicitSignOut: false,
-    filters: { q: '', status: '', priority: '', trade: '', unit: '', pu: '', when: '' }, boardUnit: '', boardPu: '', channels: {}, tradeDraft: null,
+    filters: { q: '', status: '', priority: '', trade: '', unit: '', pu: '', when: '' }, boardUnit: '', boardPu: '', channels: {}, tradeDraft: null, prefs: null,
   };
 
   function esc(s) {
@@ -228,9 +228,22 @@
     $('#toast-wrap').appendChild(el); setTimeout(() => el.remove(), ms);
   }
   function fmtTime(iso) {
-    if (!iso) return '';
-    try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
-    catch { return iso; }
+    const d = new Date(iso);
+    if (!iso || Number.isNaN(d.getTime())) return '';
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: zoneName(), year: 'numeric', month: 'short', day: 'numeric',
+      hour: '2-digit', minute: '2-digit', hourCycle: state.prefs?.clock === '12' ? 'h12' : 'h23', timeZoneName: 'short',
+    }).formatToParts(d);
+    const g = (t) => parts.find((p) => p.type === t)?.value || '';
+    const period = g('dayPeriod');
+    return g('day') + ' ' + g('month') + ' ' + g('year') + ', ' + g('hour') + ':' + g('minute') + (period ? ' ' + period : '') + ' ' + g('timeZoneName');
+  }
+  function fmtDate(iso) {
+    const d = new Date(iso);
+    if (!iso || Number.isNaN(d.getTime())) return '';
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: zoneName(), day: 'numeric', month: 'short', year: 'numeric' }).formatToParts(d);
+    const g = (t) => parts.find((p) => p.type === t)?.value || '';
+    return g('day') + ' ' + g('month') + ' ' + g('year');
   }
   function getTrades() {
     const raw = state.settings?.data_source?.trades;
@@ -452,7 +465,7 @@
     root.innerHTML = '<div class="overlay" id="wx-sheet"><div class="modal" role="dialog" aria-label="Shell Scotford weather"><div class="modal-head"><strong>Shell Scotford</strong><button class="btn btn-sm" id="wx-close" type="button">Close</button></div><div class="modal-body wx-sheet">' +
       '<p>' + wxIcon(current.weather_code) + ' ' + Math.round(current.temperature_2m) + '° · wind ' + Math.round(current.wind_speed_10m) + ' km/h · gusts ' + Math.round(current.wind_gusts_10m) + ' km/h · ' + esc(compassDir(current.wind_direction_10m)) + '</p>' +
       '<p>Last updated ' + esc(fmtTime(pack.fetchedAt)) + (navigator.onLine ? '' : ' · saved on this device') + '</p>' +
-      '<p class="wx-advisory">Advisory only. Follow site crane and work-at-height procedures. Amber from ' + limits.amber + ' km/h, red from ' + limits.red + ' km/h.</p>' +
+      '<p class="wx-advisory">Advisory only. Follow site crane and work-at-height procedures. Amber from ' + limits.amber + ' km/h, red from ' + limits.red + ' km/h. The next 12 hours are Shell Scotford local time (America/Edmonton). Last updated is shown in ' + esc(zoneName()) + '.</p>' +
       '<h3>Environment Canada</h3>' + alerts +
       '<h3>Next 12 hours</h3><div class="table-wrap"><table><thead><tr><th>Time</th><th>Temp</th><th>Wind</th><th>Gust</th><th>Dir</th></tr></thead><tbody>' + rows + '</tbody></table></div></div></div></div>';
     $('#wx-close').onclick = () => { root.innerHTML = ''; if (hadJob) { const job = activeList().find((item) => item.id === hadJob.dataset.jobId); if (job) showJobModal(job); } };
@@ -577,9 +590,10 @@
     banner.textContent = mode === 'offline' ? 'You are offline. Changes will sync when the connection returns.' : (mode === 'reconnecting' ? 'Reconnecting…' : '');
   }
   function wantsNotify() {
-    return localStorage.getItem('bl_notify_' + (state.profile?.id || '')) === '1' && typeof Notification !== 'undefined' && Notification.permission === 'granted';
+    return !!state.prefs?.notify && typeof Notification !== 'undefined' && Notification.permission === 'granted';
   }
   function notify(title, body) {
+    playAlertSound();
     if (!wantsNotify()) return;
     try { new Notification(title, { body: body || '', icon: './icons/icon-192.png' }); } catch (_) {}
   }
@@ -656,6 +670,7 @@
     $('#gate')?.classList.add('hidden');
     $('#login')?.classList.remove('hidden');
     paintRememberedLogin();
+    applyAppearance(defaultPrefs());
     const err = $('#login-error');
     if (err) { err.textContent = message || ''; err.classList.toggle('hidden', !message); }
   }
@@ -861,6 +876,15 @@
     $('#gate').classList.add('hidden');
     $('#app').classList.remove('hidden');
     paintIdentity();
+    await loadPrefs();
+    const land = resolvedLanding();
+    if (land !== state.view) {
+      state.view = land;
+      $$('#main-tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.view === land));
+      ['jobs', 'mine', 'history', 'board', 'dash', 'turn', 'safety', 'planner', 'apps', 'dashboards', 'admin', 'audit', 'security', 'settings'].forEach((v) => {
+        $('#view-' + v)?.classList.toggle('hidden', v !== land);
+      });
+    }
     fillActAs().catch(() => {});
     fillAdminView().catch(() => {});
     restoreFilters();
@@ -1344,11 +1368,12 @@
     if (state.view === 'safety') renderSafety();
     if (state.view === 'dashboards') renderDashboards();
     if (state.view === 'admin') renderAdmin();
+    if (state.view === 'settings') renderSettings();
   }
   function setView(name) {
     state.view = name;
     $$('#main-tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.view === name));
-    ['jobs', 'mine', 'history', 'board', 'dash', 'turn', 'safety', 'planner', 'apps', 'dashboards', 'admin', 'audit', 'security'].forEach((v) => {
+    ['jobs', 'mine', 'history', 'board', 'dash', 'turn', 'safety', 'planner', 'apps', 'dashboards', 'admin', 'audit', 'security', 'settings'].forEach((v) => {
       $('#view-' + v).classList.toggle('hidden', v !== name);
     });
     renderAll();
@@ -1417,21 +1442,24 @@
     if (!url) return disabledBtn(label);
     return '<a class="btn btn-sm" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + esc(label) + '</a>';
   }
-  const EDMONTON = 'America/Edmonton';
   function edmontonParts(input) {
     const d = input ? new Date(input) : new Date();
     if (Number.isNaN(d.getTime())) return null;
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: EDMONTON, year: 'numeric', month: 'short', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
-    }).formatToParts(d);
-    const g = (t) => parts.find((p) => p.type === t)?.value || '';
+    const zone = zoneName();
     return {
-      stamp: g('day') + ' ' + g('month') + ' ' + g('year') + ' ' + g('hour') + ':' + g('minute') + ' ' + g('timeZoneName'),
-      dayKey: new Intl.DateTimeFormat('en-CA', { timeZone: EDMONTON, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d),
+      stamp: fmtTime(d.toISOString()),
+      dayKey: new Intl.DateTimeFormat('en-CA', { timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d),
     };
   }
-  function fmtEdmonton(iso) { return edmontonParts(iso)?.stamp || ''; }
+  function fmtEdmonton(iso) { return fmtTime(iso); }
+  function zoneHour(input) {
+    const d = input ? new Date(input) : new Date();
+    if (Number.isNaN(d.getTime())) return 0;
+    const hour = new Intl.DateTimeFormat('en-US', { timeZone: zoneName(), hour: 'numeric', hourCycle: 'h23' }).formatToParts(d).find((p) => p.type === 'hour')?.value;
+    const n = Number(hour);
+    if (!Number.isFinite(n)) return 0;
+    return n % 24;
+  }
   function statusLabel(job) {
     if (job.on_hold || job.status === 'on_hold') return 'On hold';
     return ({ not_started: 'Not started', in_progress: 'In progress', done: 'Done' })[job.status] || String(job.status || '—').replaceAll('_', ' ');
@@ -2142,10 +2170,11 @@
     if (!raw) return null;
     const due = new Date(raw);
     if (Number.isNaN(due.getTime())) return null;
-    const today = new Date(edmontonParts(new Date()).dayKey + 'T00:00:00');
-    const dueDay = new Date(edmontonParts(due).dayKey + 'T00:00:00');
-    const days = Math.round((dueDay - today) / 86400000);
-    const pretty = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Edmonton', month: 'short', day: 'numeric' }).format(due);
+    const todayKey = edmontonParts(new Date()).dayKey;
+    const dueKey = edmontonParts(due).dayKey;
+    const parseKey = (key) => { const [y, m, d] = String(key || '').split('-').map(Number); return Date.UTC(y, (m || 1) - 1, d || 1); };
+    const days = Math.round((parseKey(dueKey) - parseKey(todayKey)) / 86400000);
+    const pretty = fmtDate(due);
     if (days < 0) return { kind: 'overdue', cls: 'hot', label: 'Overdue ' + pretty };
     if (days <= 7) return { kind: 'soon', cls: 'hot', label: 'Due soon ' + pretty };
     return { kind: 'ok', cls: 'ok', label: 'On time ' + pretty };
@@ -2647,7 +2676,7 @@
       const keys = jobDateKeys(job);
       if (date && keys.length && !keys.includes(date) && (job.job_date || '').slice(0, 10) !== date && dueBucket(job) === 'later' && job.status === 'done') return false;
       if (shift === 'all') return true;
-      const hour = new Date(job.updated_at || job.created_at || Date.now()).getHours();
+      const hour = zoneHour(job.updated_at || job.created_at || Date.now());
       return shift === 'day' ? hour >= 6 && hour < 18 : hour < 6 || hour >= 18;
     });
   }
@@ -2670,7 +2699,7 @@
       const ackLine = ack.concat(concerns).join('<br>');
       return '<p><strong>' + esc(j.wo_number) + '</strong> ' + esc(j.title) + ' · ' + esc(j.unit || '') + (j.on_hold ? ' · BLOCKED ' + esc(j.hold_reason || '') : '') + '<br>Signed: ' + esc(signs.join(', ') || '—') + (notes ? '<br>Notes: ' + esc(notes) : '') + (ackLine ? '<br>' + esc(ackLine).replaceAll('&lt;br&gt;', '<br>') : '') + '</p>';
     }).join('') || '<p>None.</p>');
-    return '<h2>Beamlock shift handover</h2><p>' + esc(new Date().toLocaleString()) + ' · ' + esc(state.user?.name || '') + '</p>' + block('Completed', done) + block('Open', open) + block('Blocked', blocked);
+    return '<h2>Beamlock shift handover</h2><p>' + esc(fmtTime(new Date().toISOString())) + ' · times in ' + esc(zoneName()) + ' · ' + esc(state.user?.name || '') + '</p><p>Day and night use 06:00–18:00 in ' + esc(zoneName()) + '. Stored times are not changed.</p>' + block('Completed', done) + block('Open', open) + block('Blocked', blocked);
   }
   function openHandover() {
     if (!canSeeDash()) return toast('The handover is for supervisors, planners, and admins');
@@ -2851,31 +2880,234 @@
       setTimeout(() => { state.changingCode = false; }, 1500);
     }
   }
-  function openProfile() {
-    const on = localStorage.getItem('bl_notify_' + (state.profile?.id || '')) === '1';
-    const root = $('#modal-root');
-    root.innerHTML = '<div class="overlay"><div class="modal" role="dialog" aria-label="Settings"><div class="modal-head"><strong>Settings</strong><button class="btn btn-sm" id="prof-close" type="button">Close</button></div><div class="modal-body">' +
-      '<p><strong>' + esc(state.user?.name || '') + '</strong><br>' + esc(state.user?.realRole || '') + (state.profile?.status === 'pending' ? ' · waiting for approval' : '') + '</p>' +
-      '<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="prof-notify"' + (on ? ' checked' : '') + ' /> Notify me on this device</label>' +
-      '<p style="color:var(--muted)">Alerts fire while Beamlock is open: your trade when a step becomes next, and supervisors when a job is blocked or overdue. Background web push is not enabled. On iPhone, allow notifications for the Home Screen app; they show while the app is open.</p>' +
-      '<button type="button" class="btn btn-block" id="btn-install-profile" data-install style="margin-top:8px">Add to Home Screen</button>' +
+  const ZONE_CHOICES = [
+    ['America/Edmonton', 'America/Edmonton (Scotford)'],
+    ['America/Vancouver', 'America/Vancouver'],
+    ['America/Winnipeg', 'America/Winnipeg'],
+    ['America/Toronto', 'America/Toronto'],
+    ['America/Halifax', 'America/Halifax'],
+    ['America/St_Johns', "America/St. John's"],
+    ['America/Denver', 'America/Denver'],
+    ['UTC', 'UTC'],
+  ];
+  function zoneOk(zone) {
+    try { new Intl.DateTimeFormat('en-CA', { timeZone: zone }).format(new Date()); return true; } catch { return false; }
+  }
+  function zoneName() {
+    const zone = state.prefs?.zone || 'America/Edmonton';
+    return zoneOk(zone) ? zone : 'America/Edmonton';
+  }
+  function canPlaySound() { return !!(window.AudioContext || window.webkitAudioContext); }
+  function playAlertSound() {
+    if (!state.prefs?.sound || !canPlaySound()) return;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      const ctx = new Ctx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = 880;
+      gain.gain.value = 0.05;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.12);
+      setTimeout(() => ctx.close(), 400);
+    } catch (_) {}
+  }
+  function defaultPrefs() {
+    return { theme: 'system', font: 'system', text: 'default', density: 'comfortable', contrast: false, motion: 'system', zone: 'America/Edmonton', clock: '24', landing: 'jobs', notify: false, sound: false };
+  }
+  function landingChoices() {
+    const items = [['jobs', 'Jobs'], ['apps', 'Apps'], ['mine', 'My trade'], ['history', 'My jobs'], ['board', 'Live board'], ['safety', 'Safety']];
+    const real = state.user?.realRole;
+    const approved = isApproved();
+    if (approved && ['Supervisor', 'Planner', 'Admin'].includes(real)) items.push(['dash', 'Dashboard'], ['turn', 'Turnaround']);
+    items.push(['dashboards', 'Dashboards'], ['audit', 'Audit'], ['security', 'Security'], ['settings', 'Settings']);
+    if (approved && ['Admin', 'Planner'].includes(real)) items.push(['planner', 'Planner'], ['admin', 'Admin']);
+    return items;
+  }
+  function resolvedLanding() {
+    const want = state.prefs?.landing || 'jobs';
+    return landingChoices().some((item) => item[0] === want) ? want : 'jobs';
+  }
+  function sanitizePrefs(raw) {
+    const base = defaultPrefs();
+    const src = raw && typeof raw === 'object' ? raw : {};
+    const pick = (key, allowed, fallback) => allowed.includes(src[key]) ? src[key] : fallback;
+    const zone = ZONE_CHOICES.some((item) => item[0] === src.zone) && zoneOk(src.zone) ? src.zone : base.zone;
+    const landing = landingChoices().some((item) => item[0] === src.landing) ? src.landing : base.landing;
+    return {
+      theme: pick('theme', ['system', 'light', 'dark'], base.theme),
+      font: pick('font', ['system', 'verdana', 'georgia', 'arial'], base.font),
+      text: pick('text', ['default', 'large', 'xlarge'], base.text),
+      density: pick('density', ['comfortable', 'compact'], base.density),
+      contrast: !!src.contrast,
+      motion: pick('motion', ['system', 'reduce'], base.motion),
+      zone,
+      clock: pick('clock', ['24', '12'], base.clock),
+      landing,
+      notify: !!src.notify,
+      sound: !!src.sound,
+    };
+  }
+  function prefsKey() { return 'bl_prefs_' + (state.profile?.id || ''); }
+  function rememberLocalPrefs(prefs, at) {
+    if (!state.profile?.id) return;
+    localStorage.setItem(prefsKey(), JSON.stringify(prefs));
+    localStorage.setItem(prefsKey() + '_at', String(at || Date.now()));
+  }
+  function readLocalPrefs() {
+    if (!state.profile?.id) return defaultPrefs();
+    let stored = null;
+    try { stored = JSON.parse(localStorage.getItem(prefsKey()) || 'null'); } catch { stored = null; }
+    if (!stored && localStorage.getItem('bl_hc') === '1') {
+      stored = { contrast: true };
+      localStorage.removeItem('bl_hc');
+    }
+    if (localStorage.getItem('bl_notify_' + state.profile.id) === '1') stored = { ...(stored || {}), notify: true };
+    return sanitizePrefs(stored || {});
+  }
+  function systemDark() { return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches); }
+  function systemReduce() { return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
+  function applyAppearance(prefs) {
+    const p = sanitizePrefs(prefs || defaultPrefs());
+    const root = document.documentElement;
+    const dark = p.theme === 'dark' || (p.theme === 'system' && systemDark());
+    root.classList.toggle('dark', dark && !p.contrast);
+    root.classList.toggle('hc', !!p.contrast);
+    root.dataset.font = p.font;
+    root.dataset.text = p.text;
+    root.dataset.density = p.density;
+    root.dataset.motion = p.motion;
+    root.classList.toggle('reduce-motion', p.motion === 'reduce' || (p.motion === 'system' && systemReduce()));
+    const btn = $('#btn-hc');
+    if (btn) btn.setAttribute('aria-pressed', p.contrast ? 'true' : 'false');
+    const notifyBtn = $('#btn-notify');
+    if (notifyBtn) notifyBtn.setAttribute('aria-pressed', p.notify ? 'true' : 'false');
+  }
+  function paintPrefPreview() {
+    const el = $('#settings-now');
+    if (el) el.textContent = fmtTime(new Date().toISOString()) + ' · ' + zoneName();
+    renderDataSource();
+    if (state.weather) paintWeather(state.weather);
+  }
+  async function persistPrefs() {
+    state.prefs = sanitizePrefs(state.prefs);
+    rememberLocalPrefs(state.prefs, Date.now());
+    applyAppearance(state.prefs);
+    paintPrefPreview();
+    if (!state.profile?.id) return;
+    if (!navigator.onLine) { state.prefsDirty = true; return; }
+    const { error } = await sb.from('user_preferences').upsert({ user_id: state.profile.id, prefs: state.prefs });
+    state.prefsDirty = !!error;
+    if (error) toast('Saved on this device. It will sync when the connection returns.');
+  }
+  async function loadPrefs() {
+    const local = readLocalPrefs();
+    state.prefs = local;
+    applyAppearance(local);
+    if (!state.profile?.id || !navigator.onLine) return;
+    const { data, error } = await sb.from('user_preferences').select('prefs, updated_at').eq('user_id', state.profile.id).maybeSingle();
+    if (error) return;
+    const localAt = Number(localStorage.getItem(prefsKey() + '_at') || 0);
+    const remoteAt = data?.updated_at ? new Date(data.updated_at).getTime() : 0;
+    if (data && remoteAt >= localAt) {
+      state.prefs = sanitizePrefs(data.prefs);
+      rememberLocalPrefs(state.prefs, remoteAt);
+      applyAppearance(state.prefs);
+      return;
+    }
+    if (!data || localAt > remoteAt) await persistPrefs();
+  }
+  async function updatePref(key, value) {
+    const y = window.scrollY;
+    state.prefs = sanitizePrefs({ ...(state.prefs || defaultPrefs()), [key]: value });
+    await persistPrefs();
+    if (Math.abs(window.scrollY - y) > 1) window.scrollTo(0, y);
+  }
+  function renderSettings() {
+    const host = $('#settings-body');
+    if (!host || !state.user) return;
+    if (host.contains(document.activeElement)) return;
+    if (['code-current', 'code-new', 'code-confirm'].some((id) => document.getElementById(id)?.value)) return;
+    const p = sanitizePrefs(state.prefs);
+    const opt = (value, label, current) => '<option value="' + esc(value) + '"' + (value === current ? ' selected' : '') + '>' + esc(label) + '</option>';
+    const zones = ZONE_CHOICES.filter((item) => zoneOk(item[0]));
+    const notifyApi = typeof Notification !== 'undefined';
+    const soundApi = canPlaySound();
+    host.innerHTML = '<section class="pref-group"><h3>Appearance</h3>' +
+      '<label class="pref-row">Theme<select class="select" data-pref="theme">' + opt('system', 'System', p.theme) + opt('light', 'Light', p.theme) + opt('dark', 'Dark', p.theme) + '</select></label>' +
+      '<label class="pref-row">Font<select class="select" data-pref="font">' + opt('system', 'System', p.font) + opt('verdana', 'Verdana', p.font) + opt('georgia', 'Georgia', p.font) + opt('arial', 'Arial', p.font) + '</select></label>' +
+      '<p class="pref-sample">The quick brown fox jumps over the lazy dog.</p>' +
+      '<label class="pref-row">Text size<select class="select" data-pref="text">' + opt('default', 'Default', p.text) + opt('large', 'Large', p.text) + opt('xlarge', 'Extra large', p.text) + '</select></label>' +
+      '<label class="pref-row">Density<select class="select" data-pref="density">' + opt('comfortable', 'Comfortable', p.density) + opt('compact', 'Compact', p.density) + '</select></label>' +
+      '<p class="pref-note">Compact tightens spacing around cards. Buttons, tabs, and fields stay at least 44 pixels tall.</p></section>' +
+      '<section class="pref-group"><h3>Accessibility</h3>' +
+      '<label class="pref-row"><span><input type="checkbox" data-pref="contrast"' + (p.contrast ? ' checked' : '') + ' /> High contrast</span></label>' +
+      '<p class="pref-note">This is the same switch as High contrast in the header. It overrides light and dark.</p>' +
+      '<label class="pref-row">Motion<select class="select" data-pref="motion">' + opt('system', 'System default', p.motion) + opt('reduce', 'Reduce motion', p.motion) + '</select></label></section>' +
+      '<section class="pref-group"><h3>Regional</h3>' +
+      '<label class="pref-row">Time zone<select class="select" data-pref="zone">' + zones.map((item) => opt(item[0], item[1], p.zone)).join('') + '</select></label>' +
+      '<label class="pref-row">Clock<select class="select" data-pref="clock">' + opt('24', '24-hour', p.clock) + opt('12', '12-hour', p.clock) + '</select></label>' +
+      '<p class="pref-note">Dates stay in the form 6 Nov 2026. Daylight saving time follows the selected zone. Job timestamps stored on the server are not rewritten.</p>' +
+      '<p id="settings-now" class="pref-sample"></p></section>' +
+      '<section class="pref-group"><h3>Notifications</h3>' +
+      (notifyApi
+        ? '<label class="pref-row"><span><input type="checkbox" data-pref="notify"' + (p.notify ? ' checked' : '') + ' /> Browser notifications on this device</span></label><p class="pref-note">Alerts show while Beamlock is open, after the browser allows them. The Notifications button in the header uses this same switch.</p>'
+        : '<p class="pref-note">This browser cannot show notifications.</p>') +
+      (soundApi
+        ? '<label class="pref-row"><span><input type="checkbox" data-pref="sound"' + (p.sound ? ' checked' : '') + ' /> Play a short sound with alerts</span></label><button type="button" class="btn btn-sm" id="settings-sound">Test sound</button>'
+        : '<p class="pref-note">This browser cannot play a sound.</p>') +
+      '</section>' +
+      '<section class="pref-group"><h3>General</h3>' +
+      '<label class="pref-row">Page after sign-in<select class="select" data-pref="landing">' + landingChoices().map((item) => opt(item[0], item[1], p.landing)).join('') + '</select></label>' +
+      '<p class="pref-note">Used the next time you sign in. Only pages your role can open are listed.</p>' +
+      '<button type="button" class="btn" id="settings-reset">Reset my preferences</button></section>' +
+      '<section class="pref-group"><h3>Account</h3>' +
+      '<p><strong>' + esc(state.user.name || '') + '</strong><br>' + esc(state.user.realRole || '') + (state.profile?.status === 'pending' ? ' · waiting for approval' : '') + '</p>' +
+      '<button type="button" class="btn" id="btn-install-profile" data-install>Add to Home Screen</button>' +
       '<h3>Change sign-in code</h3>' +
-      '<p style="color:var(--muted)">This changes the code for your own account. Your role stays the same. A connection is required. The code is not saved on this device.</p>' +
+      '<p class="pref-note">This changes the code for your own account. Your role stays the same. A connection is required. The code is not saved on this device.</p>' +
       '<form id="code-form" method="post" action="#" autocomplete="off">' +
-      '<label class="lbl" for="code-current">Current sign-in code</label>' +
-      '<input id="code-current" class="input" type="password" inputmode="numeric" autocomplete="current-password" autocapitalize="off" spellcheck="false" />' +
-      '<label class="lbl" for="code-new">New sign-in code</label>' +
-      '<input id="code-new" class="input" type="password" inputmode="numeric" autocomplete="new-password" autocapitalize="off" spellcheck="false" />' +
-      '<label class="lbl" for="code-confirm">Confirm new sign-in code</label>' +
-      '<input id="code-confirm" class="input" type="password" inputmode="numeric" autocomplete="new-password" autocapitalize="off" spellcheck="false" />' +
-      '<p id="code-error" class="hold-banner hidden"></p>' +
-      '<button type="submit" class="btn btn-primary btn-block" id="code-save" style="margin-top:12px">Change sign-in code</button>' +
-      '</form>' +
-      '<p id="sync-line"></p></div></div></div>';
-    $('#prof-close').onclick = () => { root.innerHTML = ''; };
-    $('#btn-install-profile') && ($('#btn-install-profile').onclick = () => startInstall());
+      '<label class="lbl" for="code-current">Current sign-in code</label><input id="code-current" class="input" type="password" inputmode="numeric" autocomplete="current-password" autocapitalize="off" spellcheck="false" />' +
+      '<label class="lbl" for="code-new">New sign-in code</label><input id="code-new" class="input" type="password" inputmode="numeric" autocomplete="new-password" autocapitalize="off" spellcheck="false" />' +
+      '<label class="lbl" for="code-confirm">Confirm new sign-in code</label><input id="code-confirm" class="input" type="password" inputmode="numeric" autocomplete="new-password" autocapitalize="off" spellcheck="false" />' +
+      '<p id="code-error" class="hold-banner hidden"></p><button type="submit" class="btn btn-primary" id="code-save">Change sign-in code</button></form></section>';
+    paintPrefPreview();
     paintInstall();
-    $('#code-form').onsubmit = async (e) => {
+    host.querySelectorAll('[data-pref]').forEach((el) => {
+      const apply = async () => {
+        const key = el.dataset.pref;
+        let value = el.type === 'checkbox' ? el.checked : el.value;
+        if (key === 'notify' && value) {
+          if (!notifyApi) { el.checked = false; return; }
+          const perm = await Notification.requestPermission();
+          if (perm !== 'granted') { el.checked = false; toast('Notifications were not allowed'); return; }
+        }
+        if (key === 'sound' && value) playAlertSound();
+        await updatePref(key, value);
+      };
+      el.addEventListener('change', () => { apply().catch(() => toast('Could not save that preference')); });
+    });
+    $('#settings-sound') && ($('#settings-sound').onclick = () => {
+      const previous = state.prefs?.sound;
+      state.prefs = { ...(state.prefs || defaultPrefs()), sound: true };
+      playAlertSound();
+      state.prefs.sound = previous;
+    });
+    $('#settings-reset') && ($('#settings-reset').onclick = async () => {
+      if (!confirm('Reset your preferences to the defaults? Jobs and other people are not changed.')) return;
+      const y = window.scrollY;
+      state.prefs = defaultPrefs();
+      await persistPrefs();
+      if (host) host.innerHTML = '';
+      renderSettings();
+      window.scrollTo(0, y);
+      toast('Your preferences were reset');
+    });
+    $('#btn-install-profile') && ($('#btn-install-profile').onclick = () => startInstall());
+    const form = $('#code-form');
+    if (form) form.onsubmit = async (e) => {
       e.preventDefault();
       const btn = $('#code-save');
       const showErr = (message) => {
@@ -2889,27 +3121,13 @@
       if (btn) btn.disabled = true;
       const message = await changeOwnCode($('#code-current').value, $('#code-new').value, $('#code-confirm').value);
       if (btn) btn.disabled = false;
-      if (message === 'SIGN_IN') {
-        showLogin('Sign in with your new code.');
-        return;
-      }
+      if (message === 'SIGN_IN') { showLogin('Sign in with your new code.'); return; }
       if (message) { showErr(message); return; }
-      ['#code-current', '#code-new', '#code-confirm'].forEach((id) => { const el = $(id); if (el) el.value = ''; });
+      ['code-current', 'code-new', 'code-confirm'].forEach((id) => { const input = document.getElementById(id); if (input) input.value = ''; });
       toast('Sign-in code changed. This device stays signed in.');
     };
-    $('#prof-notify').onchange = async (e) => {
-      if (e.target.checked) {
-        if (!('Notification' in window)) { e.target.checked = false; return toast('This browser has no notifications'); }
-        const perm = await Notification.requestPermission();
-        if (perm !== 'granted') { e.target.checked = false; return toast('Notifications were not allowed'); }
-        localStorage.setItem('bl_notify_' + state.profile.id, '1');
-        toast('Alerts on for this device');
-      } else {
-        localStorage.removeItem('bl_notify_' + state.profile.id);
-        toast('Alerts off for this device');
-      }
-    };
   }
+  function openProfile() { setView('settings'); }
   function offlineDB() {
     return new Promise((resolve, reject) => {
       const req = indexedDB.open('beamlock-offline', 1);
@@ -3206,7 +3424,7 @@
     if (!current) return toast('No turnaround to export');
     const rows = turnaroundJobs(current).map((j) => ({
       Event: current.name, Order: j.wo_number, Title: j.title, Unit: j.unit, PU: puForUnit(j.unit).pu, Priority: j.priority, Status: j.status,
-      'Planned hours': plannedHours(j) || '', 'Completed at': j.completed_at || '', Overdue: dueBucket(j) === 'overdue' ? 'Yes' : 'No',
+      'Planned hours': plannedHours(j) || '', 'Completed at': j.completed_at || '', 'Displayed completed at': j.completed_at ? fmtTime(j.completed_at) : '', 'Time zone': zoneName(), Overdue: dueBucket(j) === 'overdue' ? 'Yes' : 'No',
     }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Turnaround');
@@ -3312,19 +3530,26 @@
     $('#btn-turn-csv') && ($('#btn-turn-csv').onclick = () => exportTurnaround('csv'));
     $('#btn-print-security') && ($('#btn-print-security').onclick = () => window.print());
     refreshSyncCount();
-    const applyHc = (on) => {
-      document.documentElement.classList.toggle('hc', !!on);
-      const btn = $('#btn-hc');
-      if (btn) btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    $('#btn-hc').onclick = () => { updatePref('contrast', !state.prefs?.contrast).catch(() => toast('Could not save that preference')); };
+    $('#btn-notify').onclick = async () => {
+      if (!('Notification' in window)) return toast('This browser has no notifications');
+      const next = !state.prefs?.notify;
+      if (next) {
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') return toast('Notifications were not allowed');
+      }
+      await updatePref('notify', next);
+      toast(next ? 'Alerts on for this device' : 'Alerts off for this device');
+      if (state.view === 'settings') renderSettings();
     };
-    applyHc(localStorage.getItem('bl_hc') === '1');
-    $('#btn-hc').onclick = () => {
-      const on = !document.documentElement.classList.contains('hc');
-      applyHc(on);
-      localStorage.setItem('bl_hc', on ? '1' : '0');
-    };
+    if (window.matchMedia) {
+      const themeQ = window.matchMedia('(prefers-color-scheme: dark)');
+      const motionQ = window.matchMedia('(prefers-reduced-motion: reduce)');
+      const onSystem = () => { if (state.prefs) applyAppearance(state.prefs); };
+      if (themeQ.addEventListener) { themeQ.addEventListener('change', onSystem); motionQ.addEventListener('change', onSystem); }
+    }
     window.addEventListener('offline', () => setLiveStatus('offline'));
-    window.addEventListener('online', () => { setLiveStatus('reconnecting'); flushOutbox().then(() => refreshAll(false)); });
+    window.addEventListener('online', () => { setLiveStatus('reconnecting'); flushOutbox().then(() => { if (state.prefsDirty) persistPrefs(); refreshAll(false); }); });
     let pullY = null;
     document.addEventListener('touchstart', (e) => {
       if (window.scrollY > 8 || document.querySelector('.overlay')) { pullY = null; return; }
