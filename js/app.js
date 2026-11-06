@@ -322,7 +322,7 @@
   }
 
   function boardStats() {
-    const jobs = state.jobs;
+    const jobs = activeList();
     const byTradeWaiting = {};
     let notStarted = 0, inProgress = 0, done = 0, onHold = 0;
     for (const j of jobs) {
@@ -374,10 +374,12 @@
     banner.classList.toggle('offline', mode === 'offline');
     banner.textContent = mode === 'offline' ? 'You are offline. Changes will sync when the connection returns.' : (mode === 'reconnecting' ? 'Reconnecting…' : '');
   }
+  function wantsNotify() {
+    return localStorage.getItem('bl_notify_' + (state.profile?.id || '')) === '1' && typeof Notification !== 'undefined' && Notification.permission === 'granted';
+  }
   function notify(title, body) {
-    if (Notification?.permission === 'granted') {
-      try { new Notification(title, { body, icon: './icons/icon-192.png' }); } catch (_) {}
-    }
+    if (!wantsNotify()) return;
+    try { new Notification(title, { body: body || '', icon: './icons/icon-192.png' }); } catch (_) {}
   }
 
   async function refreshLive() {
@@ -389,9 +391,13 @@
     const open = state.jobs.find((j) => j.id === id);
     if (open) showJobModal(open);
   }
+  function activeList() { return state.demoOn ? (state.demoJobs || []) : state.jobs; }
   async function refreshAll(showErr) {
+    if (state.demoOn) { renderAll(); return; }
+    const prev = (state.jobs || []).map((j) => ({ id: j.id, on_hold: j.on_hold, beam: j.beam, steps: j.steps }));
     try {
       await loadFullJobs();
+      scanAlerts(prev, state.jobs);
       renderAll();
     } catch (e) {
       console.error(e);
@@ -541,6 +547,9 @@
     }
     $('#tab-planner').style.display = canPlan() ? '' : 'none';
     $('#tab-admin').style.display = canManageUsers() ? '' : 'none';
+    const seeDash = isApproved() && ['Supervisor', 'Planner', 'Admin'].includes(state.user?.role);
+    $('#tab-dash')?.classList.toggle('hidden', !seeDash);
+    $('#btn-demo')?.classList.toggle('hidden', !isRealAdmin());
     $('#adm-settings')?.classList.toggle('hidden', !isRealAdmin());
     $('#act-as-wrap')?.classList.toggle('hidden', state.profile?.role !== 'Operator');
     if (!canPlan() && state.view === 'planner') setView('jobs');
@@ -650,7 +659,7 @@
   }
 
   function filteredJobs() {
-    let list = state.jobs.slice();
+    let list = activeList().slice();
     const { q, status, priority, trade, unit, pu } = state.filters;
     if (q) {
       const qq = q.toLowerCase();
@@ -697,6 +706,7 @@
       '<div class="meta">' +
       '<span class="chip">' + esc(job.unit || '—') + '</span>' +
       (place.pu ? '<span class="chip pu">' + esc(place.pu) + '</span>' : '') +
+      (job.demo ? '<span class="chip hot">DEMO</span>' : '') +
       '<span class="chip">' + esc(job.priority) + '</span>' +
       (due ? '<span class="chip ' + due.cls + '">' + esc(due.label) + '</span>' : '') +
       (wait ? '<span class="chip hot" style="--tc:' + esc(tradeColor(wait.trade)) + '">Waiting: ' + esc(tradeLabel(wait.trade)) + '</span>' : '') +
@@ -787,18 +797,18 @@
   function renderHistory() {
     const host = $('#history-list');
     if (!host) return;
-    const list = state.jobs.filter(isMyHistory);
+    const list = activeList().filter(isMyHistory);
     host.innerHTML = list.length ? list.map((job) => '<div class="history-job"><div class="meta" style="margin-bottom:6px"><span class="chip">' + esc(myJobNote(job)) + '</span></div>' + jobCard(job) + '</div>').join('') : '<div class="empty"><strong>No jobs yet</strong><p>Sign off, comment, or create a job and it will show up here under your name.</p></div>';
   }
   function renderMine() {
-    const list = state.jobs.filter(isMyTurn);
+    const list = activeList().filter(isMyTurn);
     $('#mine-count').textContent = String(list.length);
     $('#mine-list').innerHTML = list.length ? list.map(jobCard).join('') : '<div class="empty"><strong>Nothing waiting</strong><p>' + (state.user?.trade ? 'No jobs are ready for ' + esc(tradeLabel(state.user.trade)) + '.' : 'Sign in as a trade role to see your work.') + '</p></div>';
   }
   function renderBoard() {
     const puFilter = state.boardPu || '';
     const unitFilter = state.boardUnit || '';
-    let jobs = state.jobs.slice();
+    let jobs = activeList().slice();
     const puTabs = $('#board-pu-tabs');
     if (puTabs) puTabs.innerHTML = puTabsHtml(puFilter, jobs, 'board');
     if (puFilter) jobs = jobs.filter((j) => puForUnit(j.unit).pu === puFilter);
@@ -830,7 +840,7 @@
     }
     host.innerHTML = groupedSectionsHtml(jobs, 'board') || '<div class="empty">No jobs on board.</div>';
   }
-  function renderPlanner() { $('#planner-list').innerHTML = state.jobs.map(jobCard).join('') || '<div class="empty"><strong>No jobs yet</strong><p>Create one, or import a maintenance schedule.</p></div>'; }
+  function renderPlanner() { $('#planner-list').innerHTML = activeList().map(jobCard).join('') || '<div class="empty"><strong>No jobs yet</strong><p>Create one, or import a maintenance schedule.</p></div>'; }
   async function renderAudit() {
     const { data } = await sb.from('audit_log').select('*').order('created_at', { ascending: false }).limit(200);
     $('#audit-list').innerHTML = (data || []).map((a) =>
@@ -981,13 +991,14 @@
     if (state.view === 'planner') renderPlanner();
     if (state.view === 'audit') renderAudit();
     if (state.view === 'apps') renderApps();
+    if (state.view === 'dash') renderDash();
     if (state.view === 'dashboards') renderDashboards();
     if (state.view === 'admin') renderAdmin();
   }
   function setView(name) {
     state.view = name;
     $$('#main-tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.view === name));
-    ['jobs', 'mine', 'history', 'board', 'planner', 'apps', 'dashboards', 'admin', 'audit'].forEach((v) => {
+    ['jobs', 'mine', 'history', 'board', 'dash', 'planner', 'apps', 'dashboards', 'admin', 'audit', 'security'].forEach((v) => {
       $('#view-' + v).classList.toggle('hidden', v !== name);
     });
     renderAll();
@@ -1279,6 +1290,7 @@
         document.body.appendChild(box);
       };
     });
+    resolveThumbs(root);
     $('#close-modal').onclick = () => { root.innerHTML = ''; };
     $('#job-overlay').onclick = (e) => { if (e.target.id === 'job-overlay') root.innerHTML = ''; };
 
@@ -1301,6 +1313,12 @@
     $$('.circle', root).forEach((c) => {
       c.onclick = async () => {
         const id = c.dataset.assignee; const signed = c.classList.contains('signed');
+        if (state.demoOn) { demoToggleSign(job.id, id, signed); return; }
+        if (!navigator.onLine) {
+          await queueOffline({ id: 'q-' + Date.now(), kind: 'signoff', at: Date.now(), assigneeId: id, signed: !signed, name: state.user.name, jobId: job.id });
+          toast('Saved on this device. It will send when you are back online.');
+          return;
+        }
         const step = job.steps.find((s) => (s.assignees || []).some((a) => a.id === id));
         if (!step || !canActOnStep(step)) return toast('That step belongs to another trade');
         try {
@@ -1429,6 +1447,21 @@
         e.preventDefault();
         const body = (form.body?.value || '').trim();
         const files = [...(form.querySelector('input[type=file]')?.files || [])];
+        if (state.demoOn) {
+          if (!body && !files.length) return toast('Comment required');
+          job.comments = job.comments || [];
+          job.comments.push({ id: 'demo-c-' + Date.now(), author_name: state.user.name, author_role: state.user.role, body: body || '(photo)', created_at: new Date().toISOString(), channel: form.dataset.step ? 'step' : 'general', section: form.dataset.section || null, step_id: form.dataset.step || null });
+          showJobModal(job);
+          toast('DEMO comment — not saved to the plant');
+          return;
+        }
+        if (!navigator.onLine) {
+          const buffers = [];
+          for (const file of files) buffers.push(await file.arrayBuffer());
+          await queueOffline({ id: 'q-' + Date.now(), kind: 'comment', at: Date.now(), jobId: job.id, stepId: form.dataset.step || null, section: form.dataset.section || null, body: body || '(photo)', name: state.user.name, role: state.user.role, photos: buffers });
+          toast('Comment saved on this device. It will send when you are back online.');
+          return;
+        }
         let photos = [];
         if (files.length) {
           try { photos = await uploadPhotos(job.id, files); }
@@ -1453,7 +1486,7 @@
   }
 
   function commentCard(c) {
-    const photos = commentPhotos(c).map((url) => '<img class="thumb" src="' + esc(url) + '" data-full="' + esc(url) + '" alt="Photo" />').join('');
+    const photos = commentPhotos(c).map((url) => '<img class="thumb" src="' + esc(url) + '" data-full="' + esc(url) + '" data-raw="' + esc(url) + '" alt="Photo" />').join('');
     return '<div class="comment"><div class="who"><span>' + esc(c.author_name) + ' · ' + esc(c.author_role) + ' · ' + fmtTime(c.created_at) + '</span><button type="button" class="btn btn-sm" data-copy-comment="' + esc(c.id) + '">Copy to UTL log</button></div><div>' + esc(c.body) + '</div>' +
       (photos ? '<div class="comment-photos">' + photos + '</div>' : '') + '</div>';
   }
@@ -1542,7 +1575,8 @@
       const path = jobId + '/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.jpg';
       const { error } = await sb.storage.from('comment-photos').upload(path, blob, { contentType: 'image/jpeg', upsert: false });
       if (error) throw error;
-      urls.push(sb.storage.from('comment-photos').getPublicUrl(path).data.publicUrl);
+      const signed = await sb.storage.from('comment-photos').createSignedUrl(path, 60 * 60 * 24 * 7);
+      urls.push(signed.data?.signedUrl || path);
     }
     return urls;
   }
@@ -1985,6 +2019,7 @@
     return { created, updated };
   }
   function openBeamImport() {
+    if (state.demoOn) { toast('Exit demo before importing a real maintenance schedule.'); return; }
     const root = $('#modal-root');
     let parsed = null;
     root.innerHTML = '<div class="overlay"><div class="modal"><div class="modal-head"><strong>Import maintenance schedule</strong><button class="btn btn-sm" id="close-beam">Close</button></div><div class="modal-body">' +
@@ -2101,6 +2136,321 @@
     XLSX.writeFile(wb, 'beamlock-export.xlsx');
   }
 
+  function canSeeDash() { return isApproved() && ['Supervisor', 'Planner', 'Admin'].includes(state.user?.role); }
+  function dayKeyOffset(n) {
+    const d = new Date();
+    d.setDate(d.getDate() + n);
+    return edmontonParts(d).dayKey;
+  }
+  function dueBucket(job) {
+    const raw = job.beam?.dueDate || (job.job_date ? job.job_date + 'T16:00:00' : '');
+    if (!raw) return '';
+    const key = edmontonParts(new Date(raw)).dayKey;
+    const today = dayKeyOffset(0);
+    if (key < today) return 'overdue';
+    if (key === today) return 'today';
+    if (key <= dayKeyOffset(7)) return 'week';
+    return 'later';
+  }
+  function renderDash() {
+    const host = $('#dash-body');
+    if (!host) return;
+    const jobs = activeList().filter((j) => !j.archived);
+    const units = [];
+    for (const site of getSites()) for (const pu of site.processUnits) for (const unit of pu.units) if (!units.includes(unit)) units.push(unit);
+    const unitRows = units.map((unit) => {
+      const list = jobs.filter((j) => normalizeUnit(j.unit) === unit);
+      const done = list.filter((j) => j.status === 'done').length;
+      const pct = list.length ? Math.round(done / list.length * 100) : 0;
+      const place = puForUnit(unit);
+      return { unit, pu: place.pu, total: list.length, done, pct };
+    }).filter((r) => r.total);
+    const puMap = {};
+    for (const row of unitRows) {
+      const key = row.pu || 'Other';
+      puMap[key] = puMap[key] || { total: 0, done: 0 };
+      puMap[key].total += row.total;
+      puMap[key].done += row.done;
+    }
+    const counts = { overdue: 0, today: 0, week: 0 };
+    for (const job of jobs) {
+      if (job.status === 'done') continue;
+      const bucket = dueBucket(job);
+      if (counts[bucket] != null) counts[bucket]++;
+    }
+    const openSteps = [];
+    for (const job of jobs) {
+      if (job.status === 'done') continue;
+      for (const step of job.steps || []) {
+        if (step.status !== 'ready' && step.status !== 'in_progress') continue;
+        const started = step.beam?.earlyStartIso || job.beam?.dueDate || job.created_at || 0;
+        openSteps.push({ trade: step.trade, label: step.label, wo: job.wo_number, when: new Date(started).getTime() || 0, hold: job.on_hold });
+      }
+    }
+    openSteps.sort((a, b) => a.when - b.when);
+    host.innerHTML = '<div class="stats">' +
+      '<div class="stat hold"><div class="n">' + counts.overdue + '</div><div class="l">Overdue</div></div>' +
+      '<div class="stat wait"><div class="n">' + counts.today + '</div><div class="l">Due today</div></div>' +
+      '<div class="stat ip"><div class="n">' + counts.week + '</div><div class="l">Due this week</div></div>' +
+      '<div class="stat"><div class="n">' + jobs.length + '</div><div class="l">Jobs in view</div></div></div>' +
+      '<div class="dash-grid"><div class="tile-edit"><h3>Complete by unit</h3>' +
+      (unitRows.map((r) => '<div class="bar-row"><span>' + esc(r.unit) + (r.pu ? ' · ' + esc(r.pu) : '') + '</span><div class="bar"><span style="width:' + r.pct + '%"></span></div><strong>' + r.pct + '%</strong></div>').join('') || '<p>No jobs.</p>') +
+      '</div><div class="tile-edit"><h3>Complete by process unit</h3>' +
+      Object.entries(puMap).map(([pu, v]) => '<div class="bar-row"><span>' + esc(pu) + '</span><div class="bar"><span style="width:' + (v.total ? Math.round(v.done / v.total * 100) : 0) + '%"></span></div><strong>' + (v.total ? Math.round(v.done / v.total * 100) : 0) + '%</strong></div>').join('') +
+      '<h3>Trades holding work</h3><div class="hold-list">' +
+      (openSteps.slice(0, 8).map((s) => '<div>' + esc(tradeLabel(s.trade)) + ' · ' + esc(s.wo) + ' · ' + esc(s.label) + (s.hold ? ' · blocked' : '') + '</div>').join('') || '<p>Nothing waiting.</p>') +
+      '</div></div></div>';
+  }
+  function handoverJobs() {
+    const unit = $('#hand-unit')?.value || '';
+    const shift = $('#hand-shift')?.value || 'all';
+    const date = $('#hand-date')?.value || dayKeyOffset(0);
+    return activeList().filter((job) => {
+      if (unit && normalizeUnit(job.unit) !== unit) return false;
+      const keys = jobDateKeys(job);
+      if (date && keys.length && !keys.includes(date) && (job.job_date || '').slice(0, 10) !== date && dueBucket(job) === 'later' && job.status === 'done') return false;
+      if (shift === 'all') return true;
+      const hour = new Date(job.updated_at || job.created_at || Date.now()).getHours();
+      return shift === 'day' ? hour >= 6 && hour < 18 : hour < 6 || hour >= 18;
+    });
+  }
+  function handoverHtml(list) {
+    const done = list.filter((j) => j.status === 'done');
+    const blocked = list.filter((j) => j.on_hold);
+    const open = list.filter((j) => j.status !== 'done' && !j.on_hold);
+    const block = (title, rows) => '<h3>' + title + ' (' + rows.length + ')</h3>' + (rows.map((j) => {
+      const signs = (j.steps || []).flatMap((s) => (s.assignees || []).filter((a) => a.signed_off).map((a) => s.trade + ': ' + a.person_name));
+      const notes = (j.comments || []).slice(-3).map((c) => c.author_name + ': ' + c.body).join(' | ');
+      return '<p><strong>' + esc(j.wo_number) + '</strong> ' + esc(j.title) + ' · ' + esc(j.unit || '') + (j.on_hold ? ' · BLOCKED ' + esc(j.hold_reason || '') : '') + '<br>Signed: ' + esc(signs.join(', ') || '—') + (notes ? '<br>Notes: ' + esc(notes) : '') + '</p>';
+    }).join('') || '<p>None.</p>');
+    return '<h2>Beamlock shift handover</h2><p>' + esc(new Date().toLocaleString()) + ' · ' + esc(state.user?.name || '') + '</p>' + block('Completed', done) + block('Open', open) + block('Blocked', blocked);
+  }
+  function openHandover() {
+    if (!canSeeDash()) return toast('The handover is for supervisors, planners, and admins');
+    const root = $('#modal-root');
+    const units = listUnits();
+    root.innerHTML = '<div class="overlay"><div class="modal" role="dialog"><div class="modal-head"><strong>Shift handover</strong><button class="btn btn-sm" id="hand-close" type="button">Close</button></div><div class="modal-body">' +
+      '<div class="filters"><select id="hand-shift" class="select"><option value="all">All shifts</option><option value="day">Day 06:00–18:00</option><option value="night">Night</option></select>' +
+      '<select id="hand-unit" class="select"><option value="">All units</option>' + units.map((u) => '<option>' + esc(u) + '</option>').join('') + '</select>' +
+      '<input id="hand-date" class="input" type="date" value="' + dayKeyOffset(0) + '" /></div>' +
+      '<div class="modal-actions"><button class="btn btn-primary" id="hand-print" type="button">Print / PDF</button><button class="btn" id="hand-share" type="button">Share / Email</button></div>' +
+      '<div id="hand-body" class="handover-sheet"></div></div></div></div>';
+    const draw = () => { $('#hand-body').innerHTML = handoverHtml(handoverJobs()); };
+    draw();
+    $('#hand-shift').onchange = draw;
+    $('#hand-unit').onchange = draw;
+    $('#hand-date').onchange = draw;
+    $('#hand-close').onclick = () => { root.innerHTML = ''; };
+    $('#hand-print').onclick = () => {
+      const frame = document.createElement('iframe');
+      frame.className = 'print-root';
+      frame.style.position = 'fixed'; frame.style.right = '0'; frame.style.bottom = '0'; frame.style.width = '0'; frame.style.height = '0'; frame.style.border = '0';
+      document.body.appendChild(frame);
+      const doc = frame.contentDocument;
+      doc.open();
+      doc.write('<html><head><title>Beamlock handover</title></head><body style="font-family:Segoe UI,sans-serif">' + $('#hand-body').innerHTML + '</body></html>');
+      doc.close();
+      frame.contentWindow.focus();
+      frame.contentWindow.print();
+      setTimeout(() => frame.remove(), 1000);
+    };
+    $('#hand-share').onclick = async () => {
+      const text = $('#hand-body').innerText;
+      if (navigator.share) {
+        try { await navigator.share({ title: 'Beamlock shift handover', text }); return; } catch (_) {}
+      }
+      location.href = 'mailto:?subject=' + encodeURIComponent('Beamlock shift handover') + '&body=' + encodeURIComponent(text);
+    };
+  }
+  function startDemo() {
+    if (!isRealAdmin()) return toast('Demo mode is for admins');
+    state.demoOn = true;
+    state.demoJobs = window.BLPresent.buildDemoJobs();
+    state.jobs = state.demoJobs;
+    $('#demo-banner')?.classList.remove('hidden');
+    renderAll();
+    toast('Demo orders loaded. Real jobs were not changed.');
+  }
+  function stopDemo() {
+    state.demoOn = false;
+    if (state.demoTimer) { clearInterval(state.demoTimer); state.demoTimer = null; }
+    $('#demo-play') && ($('#demo-play').textContent = 'Auto-play');
+    $('#demo-banner')?.classList.add('hidden');
+    refreshAll(true);
+  }
+  function resetDemo() {
+    if (!state.demoOn) return;
+    if (state.demoTimer) { clearInterval(state.demoTimer); state.demoTimer = null; }
+    state.demoJobs = window.BLPresent.buildDemoJobs();
+    state.jobs = state.demoJobs;
+    renderAll();
+    toast('Demo orders reset.');
+  }
+  function demoToggleSign(jobId, assigneeId, wasSigned) {
+    const job = (state.demoJobs || []).find((j) => j.id === jobId);
+    if (!job) return;
+    for (const step of job.steps) {
+      const person = (step.assignees || []).find((a) => a.id === assigneeId);
+      if (!person) continue;
+      person.signed_off = !wasSigned;
+      person.signed_at = person.signed_off ? new Date().toISOString() : null;
+      if (person.signed_off) person.person_name = state.user?.name || person.person_name;
+    }
+    window.BLPresent.advance(job);
+    state.jobs = state.demoJobs;
+    renderAll();
+    showJobModal(job);
+    toast('DEMO sign-off — not written to the plant');
+  }
+  function toggleDemoPlay() {
+    if (!state.demoOn) return;
+    if (state.demoTimer) {
+      clearInterval(state.demoTimer);
+      state.demoTimer = null;
+      $('#demo-play').textContent = 'Auto-play';
+      return;
+    }
+    $('#demo-play').textContent = 'Stop auto-play';
+    state.demoTimer = setInterval(() => {
+      const job = (state.demoJobs || []).find((j) => !j.on_hold && (j.steps || []).some((s) => (s.status === 'ready' || s.status === 'in_progress') && (s.assignees || []).some((a) => !a.signed_off)));
+      if (!job) return;
+      const step = job.steps.find((s) => (s.status === 'ready' || s.status === 'in_progress') && (s.assignees || []).some((a) => !a.signed_off));
+      const person = step.assignees.find((a) => !a.signed_off);
+      person.signed_off = true;
+      person.signed_at = new Date().toISOString();
+      window.BLPresent.advance(job);
+      state.jobs = state.demoJobs;
+      renderAll();
+      toast('DEMO ' + tradeLabel(step.trade) + ' signed ' + job.wo_number);
+    }, 3500);
+  }
+  function scanAlerts(prev, next) {
+    if (!wantsNotify()) return;
+    for (const job of next || []) {
+      const old = (prev || []).find((j) => j.id === job.id);
+      const wait = waitingTrade(job);
+      const oldWait = old ? waitingTrade(old) : null;
+      if (wait && state.user?.trade === wait.trade && (!oldWait || oldWait.id !== wait.id)) notify('Your step is next', job.wo_number + ' — ' + wait.label);
+      if (canSeeDash() && job.on_hold && !old?.on_hold) notify('Job blocked', job.wo_number + ' — ' + (job.hold_reason || 'on hold'));
+      if (canSeeDash() && dueBucket(job) === 'overdue' && (!old || dueBucket(old) !== 'overdue')) notify('Job overdue', job.wo_number + ' — ' + job.title);
+    }
+  }
+  function openProfile() {
+    const on = localStorage.getItem('bl_notify_' + (state.profile?.id || '')) === '1';
+    const root = $('#modal-root');
+    root.innerHTML = '<div class="overlay"><div class="modal" role="dialog"><div class="modal-head"><strong>Profile</strong><button class="btn btn-sm" id="prof-close" type="button">Close</button></div><div class="modal-body">' +
+      '<p><strong>' + esc(state.user?.name || '') + '</strong><br>' + esc(state.user?.realRole || '') + (state.profile?.status === 'pending' ? ' · waiting for approval' : '') + '</p>' +
+      '<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="prof-notify"' + (on ? ' checked' : '') + ' /> Notify me on this device</label>' +
+      '<p style="color:var(--muted)">Alerts fire while Beamlock is open: your trade when a step becomes next, and supervisors when a job is blocked or overdue. Background web push is not enabled. On iPhone, allow notifications for the Home Screen app; they show while the app is open.</p>' +
+      '<p id="sync-line"></p></div></div></div>';
+    $('#prof-close').onclick = () => { root.innerHTML = ''; };
+    $('#prof-notify').onchange = async (e) => {
+      if (e.target.checked) {
+        if (!('Notification' in window)) { e.target.checked = false; return toast('This browser has no notifications'); }
+        const perm = await Notification.requestPermission();
+        if (perm !== 'granted') { e.target.checked = false; return toast('Notifications were not allowed'); }
+        localStorage.setItem('bl_notify_' + state.profile.id, '1');
+        toast('Alerts on for this device');
+      } else {
+        localStorage.removeItem('bl_notify_' + state.profile.id);
+        toast('Alerts off for this device');
+      }
+    };
+  }
+  function offlineDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open('beamlock-offline', 1);
+      req.onupgradeneeded = () => { if (!req.result.objectStoreNames.contains('outbox')) req.result.createObjectStore('outbox', { keyPath: 'id' }); };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function queueOffline(op) {
+    const db = await offlineDB();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction('outbox', 'readwrite');
+      tx.objectStore('outbox').put(op);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+    });
+    await refreshSyncCount();
+  }
+  async function refreshSyncCount() {
+    try {
+      const db = await offlineDB();
+      const n = await new Promise((resolve) => {
+        const req = db.transaction('outbox', 'readonly').objectStore('outbox').count();
+        req.onsuccess = () => resolve(req.result || 0);
+      });
+      const el = $('#sync-count');
+      if (!el) return;
+      el.textContent = String(n);
+      el.classList.toggle('hidden', !n);
+    } catch (_) {}
+  }
+  async function flushOutbox() {
+    if (!navigator.onLine || state.flushing || state.demoOn) return;
+    state.flushing = true;
+    try {
+      const db = await offlineDB();
+      const items = await new Promise((resolve) => {
+        const req = db.transaction('outbox', 'readonly').objectStore('outbox').getAll();
+        req.onsuccess = () => resolve(req.result || []);
+      });
+      items.sort((a, b) => a.at - b.at);
+      for (const item of items) {
+        let drop = false;
+        if (item.kind === 'signoff') {
+          const { data, error } = await sb.from('step_assignees').select('signed_off').eq('id', item.assigneeId).maybeSingle();
+          if (error) break;
+          if (!data) { drop = true; toast('A queued sign-off was dropped. That step is gone.'); }
+          else if (item.signed && data.signed_off) { drop = true; toast('Server already has a sign-off on that step. Kept the server copy.'); }
+          else {
+            const upd = await sb.from('step_assignees').update({ signed_off: !!item.signed, signed_at: item.signed ? new Date().toISOString() : null, person_name: item.name }).eq('id', item.assigneeId);
+            if (upd.error) break;
+            if (item.jobId) await sb.rpc('advance_job', { target_job: item.jobId });
+          }
+        } else if (item.kind === 'comment') {
+          let photoUrl = null;
+          if (item.photos && item.photos[0]) {
+            const path = item.jobId + '/' + item.id + '.jpg';
+            const up = await sb.storage.from('comment-photos').upload(path, new Blob([item.photos[0]], { type: 'image/jpeg' }), { contentType: 'image/jpeg' });
+            if (up.error) break;
+            const signed = await sb.storage.from('comment-photos').createSignedUrl(path, 60 * 60 * 24 * 7);
+            photoUrl = signed.data?.signedUrl || null;
+          }
+          const ins = await sb.from('comments').insert({
+            job_id: item.jobId, step_id: item.stepId, section: item.section, channel: item.stepId ? 'step' : (item.section || 'general'),
+            body: item.body || '(photo)', author_name: item.name, author_role: item.role, photo_path: photoUrl, photo_paths: photoUrl ? [photoUrl] : [],
+          });
+          if (ins.error) break;
+        }
+        await new Promise((resolve) => {
+          const tx = db.transaction('outbox', 'readwrite');
+          tx.objectStore('outbox').delete(item.id);
+          tx.oncomplete = resolve;
+        });
+        if (drop) { /* already told the user */ }
+      }
+    } finally {
+      state.flushing = false;
+      await refreshSyncCount();
+    }
+  }
+  async function signedPhotoUrl(url) {
+    const match = String(url || '').match(/comment-photos\/([^?]+)/);
+    if (!match) return url;
+    const path = decodeURIComponent(match[1]);
+    const { data, error } = await sb.storage.from('comment-photos').createSignedUrl(path, 3600);
+    return !error && data?.signedUrl ? data.signedUrl : url;
+  }
+  function resolveThumbs(root) {
+    root.querySelectorAll('img.thumb[data-raw]').forEach(async (img) => {
+      const next = await signedPhotoUrl(img.dataset.raw);
+      if (next) { img.src = next; img.dataset.full = next; }
+    });
+  }
+
   function bind() {
     $('#main-tabs').onclick = (e) => { const t = e.target.closest('.tab'); if (t) setView(t.dataset.view); };
     const setFilter = (key, value) => { state.filters[key] = value; rememberFilters(); renderJobList(); };
@@ -2150,6 +2500,14 @@
     $('#btn-export').onclick = exportExcel;
     $('#btn-audit-refresh').onclick = renderAudit;
     $('#btn-logout').onclick = () => signOut('');
+    $('#btn-demo') && ($('#btn-demo').onclick = () => state.demoOn ? stopDemo() : startDemo());
+    $('#demo-exit') && ($('#demo-exit').onclick = stopDemo);
+    $('#demo-reset') && ($('#demo-reset').onclick = resetDemo);
+    $('#demo-play') && ($('#demo-play').onclick = toggleDemoPlay);
+    $('#btn-profile') && ($('#btn-profile').onclick = openProfile);
+    $('#btn-handover') && ($('#btn-handover').onclick = openHandover);
+    $('#btn-print-security') && ($('#btn-print-security').onclick = () => window.print());
+    refreshSyncCount();
     const applyHc = (on) => {
       document.documentElement.classList.toggle('hc', !!on);
       const btn = $('#btn-hc');
@@ -2162,7 +2520,7 @@
       localStorage.setItem('bl_hc', on ? '1' : '0');
     };
     window.addEventListener('offline', () => setLiveStatus('offline'));
-    window.addEventListener('online', () => { setLiveStatus('reconnecting'); refreshAll(false); });
+    window.addEventListener('online', () => { setLiveStatus('reconnecting'); flushOutbox().then(() => refreshAll(false)); });
     let pullY = null;
     document.addEventListener('touchstart', (e) => {
       if (window.scrollY > 8 || document.querySelector('.overlay')) { pullY = null; return; }

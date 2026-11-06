@@ -279,6 +279,24 @@ label.lbl { display: block; font-size: 12px; font-weight: 700; color: var(--mute
 .hidden { display: none !important; }
 .hold-banner { background: #fde8e6; color: var(--red); padding: 10px 12px; border-radius: 10px; font-weight: 700; margin-bottom: 12px; }
 .footer-note { text-align: center; color: var(--muted); font-size: 12px; padding: 24px 8px 40px; }
+.demo-banner { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: #1a2332; color: #fff; border: 2px solid var(--amber); border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; font-weight: 700; }
+.demo-banner .btn { background: #fff; color: #1a2332; }
+.dash-grid { display: grid; gap: 12px; }
+@media (min-width: 800px) { .dash-grid { grid-template-columns: 1.2fr .8fr; } }
+.bar-row { display: grid; grid-template-columns: 110px 1fr 48px; gap: 8px; align-items: center; margin: 6px 0; }
+.bar { height: 10px; background: var(--panel2); border-radius: 99px; overflow: hidden; }
+.bar span { display: block; height: 100%; background: var(--green); }
+.hold-list { display: grid; gap: 8px; }
+.security-page h2, .security-page h3 { color: var(--ink); }
+.security-page p { max-width: 68ch; }
+.handover-sheet { background: #fff; color: #1a2332; }
+.sync-badge { display: inline-grid; place-items: center; min-width: 18px; height: 18px; margin-left: 6px; border-radius: 99px; background: var(--amber); color: #1a1208; font-size: 11px; }
+@media print {
+  body * { visibility: hidden; }
+  .print-root, .print-root * { visibility: visible; }
+  .print-root { position: absolute; left: 0; top: 0; width: 100%; background: #fff; color: #111; }
+  .app-header, .tabs, .demo-banner, .safety-banner { display: none !important; }
+}
 .app-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
 .app-tile { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 16px; text-decoration: none; color: inherit; min-height: 120px; display: flex; flex-direction: column; gap: 8px; box-shadow: var(--shadow); }
 .app-tile.disabled { opacity: .55; cursor: not-allowed; }

@@ -61,6 +61,8 @@
       <div class="header-actions">
         <div class="user-pill" title="Connection status"><span class="live-dot" id="live-dot"></span><span class="live-label" id="live-label">Live</span><span id="user-label"></span></div>
         <button class="btn btn-sm header-btn" id="btn-hc" type="button" title="High contrast" aria-pressed="false">High contrast</button>
+        <button class="btn btn-sm header-btn hidden" id="btn-demo" type="button" title="Presentation demo">Demo</button>
+        <button class="btn btn-sm header-btn" id="btn-profile" type="button" title="Your profile and alerts">Profile <span id="sync-count" class="badge hidden">0</span></button>
         <button class="btn btn-sm header-btn" id="btn-notify" type="button" title="Turn on notifications">Notifications</button>
         <label class="header-actas hidden" id="act-as-wrap" title="Operator view">View as
           <select id="act-as" aria-label="View as"></select>
@@ -71,6 +73,11 @@
     <div id="net-banner" class="net-banner hidden" role="status"></div>
     <div id="pull-hint" class="pull-hint hidden">Release to refresh</div>
     <main class="layout">
+      <div id="demo-banner" class="demo-banner hidden"><strong>DEMO</strong> Sample orders only. Real jobs and accounts are not changed.
+        <button type="button" class="btn btn-sm" id="demo-play">Auto-play</button>
+        <button type="button" class="btn btn-sm" id="demo-reset">Reset demo</button>
+        <button type="button" class="btn btn-sm" id="demo-exit">Exit demo</button>
+      </div>
       <div id="readonly-banner" class="hold-banner hidden">Read only until your role is approved.</div>
       <div class="safety-banner" id="safety-banner">
         <strong>Safety notice:</strong> Sign-offs track work progress only. They do <em>not</em> issue or approve permits and do <em>not</em> authorize isolations or LOTO.
@@ -81,11 +88,13 @@
         <button class="tab" data-view="mine">My trade <span class="badge" id="mine-count">0</span></button>
         <button class="tab" data-view="history">My jobs</button>
         <button class="tab" data-view="board">Live board</button>
+        <button class="tab hidden" id="tab-dash" data-view="dash">Dashboard</button>
         <button class="tab" data-view="planner" id="tab-planner">Planner</button>
         <button class="tab" data-view="apps">Apps</button>
         <button class="tab" data-view="dashboards">Dashboards</button>
         <button class="tab" data-view="audit">Audit</button>
         <button class="tab" data-view="admin" id="tab-admin">Admin</button>
+        <button class="tab" data-view="security">Security</button>
       </div>
 
       <section id="view-jobs">
@@ -225,6 +234,29 @@
         <div class="audit-list" id="audit-list"></div>
       </section>
 
+      <section id="view-dash" class="hidden">
+        <div class="dash-head">
+          <h2 style="margin:0">Supervisor dashboard</h2>
+          <button type="button" class="btn btn-primary" id="btn-handover">Shift handover</button>
+        </div>
+        <div id="dash-body"></div>
+      </section>
+
+      <section id="view-security" class="hidden security-page">
+        <h2>Security and privacy</h2>
+        <p>Beamlock tracks work progress. It does not issue permits, approve permits, or authorize isolations or LOTO.</p>
+        <h3>Where the data is</h3>
+        <p>Jobs, accounts, and photos are in a Supabase project in Canada (<code>ca-central-1</code>). The site itself is static files. The browser uses only the public anon key. The service-role key is not in this site.</p>
+        <h3>Who can change what</h3>
+        <p>The database enforces this with row-level security. A trade account can sign off and comment on that trade only. Planner, Supervisor, and Admin accounts that are still waiting for approval can read and cannot write. An operator can view as any role except Admin, and the audit log says so.</p>
+        <h3>Audit and lockout</h3>
+        <p>Sign-offs, holds, comments, and account changes are written to the audit log. The database stamps the name from the signed-in account. Five wrong codes lock that account for 15 minutes.</p>
+        <h3>Photos and alerts</h3>
+        <p>Comment photos sit in a private storage bucket and open with a short-lived link while you are signed in. Alerts use this device's notification permission while Beamlock is open, and only if you turn them on under Profile. Background web push is not turned on. On iPhone, notifications need the app installed to the Home Screen and only appear while it is open.</p>
+        <p>Beamlock does not claim SOC 2, ISO 27001, or a permit-system accreditation. A printable copy is in <code>docs/SECURITY.md</code>.</p>
+        <button type="button" class="btn" id="btn-print-security">Print this page</button>
+      </section>
+
       <p class="footer-note">Beamlock prototype · Supabase Realtime · Synthetic demo data only</p>
     </main>
   </div>
@@ -234,6 +266,7 @@
 
   <script src="./vendor/supabase.js"></script>
   <script src="./vendor/xlsx.full.min.js"></script>
+  <script src="./js/present.js"></script>
   <script src="./js/config.js"></script>
   <script src="./js/app.js"></script>
 </body>
