@@ -25,7 +25,11 @@ People cannot change their own role. Role and approval live in a profiles table 
 
 ## Audit
 
-Sign-offs, holds, comments, Got it reactions, imports, and role changes write an audit row. The database stamps the actor name and role from the signed-in account. The browser does not get to invent that name. A person can add or remove only their own reaction. A reaction means they understand the item is there. It does not approve the work.
+Sign-offs, holds, comments, reactions, imports, and role changes write an audit row. The database stamps the actor name and role from the signed-in account. The browser does not get to invent that name. A person can add or remove only their own reaction. A reaction means they understand the item is there. It does not approve the work.
+
+## Unit safety
+
+Each unit card can hold muster points, unit phones, the Firehall number, showers and eyewash, notes, and a map photo. Signed-in people can read it. Only an admin can change it. Empty fields stay blank until an admin sets them. Site emergency procedures and the official muster system take precedence over the card.
 
 ## Photos
 

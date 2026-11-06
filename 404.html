@@ -271,12 +271,13 @@
       <section id="view-security" class="hidden security-page">
         <h2>Security and privacy</h2>
         <p>Beamlock tracks work progress. It does not issue permits, approve permits, or authorize isolations or LOTO.</p>
+        <p>Unit safety cards list muster points, phones, the Firehall number, and showers. They start empty. Only an admin can fill them in. Site emergency procedures and the official muster system take precedence.</p>
         <h3>Where the data is</h3>
         <p>Jobs, accounts, and photos are in a Supabase project in Canada (<code>ca-central-1</code>). The site itself is static files. The browser uses only the public anon key. The service-role key is not in this site.</p>
         <h3>Who can change what</h3>
         <p>The database enforces this with row-level security. A trade account can sign off and comment on that trade only. Planner, Supervisor, and Admin accounts that are still waiting for approval can read and cannot write. An operator can view as any role except Admin, and the audit log says so.</p>
         <h3>Audit and lockout</h3>
-        <p>Sign-offs, holds, comments, Got it reactions, and account changes are written to the audit log. The database stamps the name from the signed-in account. A reaction is stored as you, and you can take it off. It does not approve the work. Five wrong codes lock that account for 15 minutes.</p>
+        <p>Sign-offs, holds, comments, reactions, and account changes are written to the audit log. The database stamps the name from the signed-in account. A reaction is stored as you, and you can take it off. It does not approve the work. Five wrong codes lock that account for 15 minutes.</p>
         <h3>Photos and alerts</h3>
         <p>Comment photos and voice notes sit in a private storage bucket and open with a short-lived link while you are signed in. Alerts use this device's notification permission while Beamlock is open, and only if you turn them on under Profile. Background web push is not turned on. On iPhone, notifications need the app installed to the Home Screen and only appear while it is open.</p>
         <p>Beamlock does not claim SOC 2, ISO 27001, or a permit-system accreditation. A printable copy is in <code>docs/SECURITY.md</code>.</p>

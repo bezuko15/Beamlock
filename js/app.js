@@ -266,6 +266,15 @@
       job_id: jobId || null, action, actor_name: state.user?.name, actor_role: state.user?.role, detail: detail || null,
     });
   }
+  const REACTIONS = [
+    { id: 'gotit', emoji: '👍', label: 'Got it / understood' },
+    { id: 'done', emoji: '✅', label: 'Confirmed done' },
+    { id: 'look', emoji: '👀', label: 'Looking into it' },
+    { id: 'concern', emoji: '⚠️', label: 'Concern' },
+    { id: 'clap', emoji: '👏', label: 'Good job' },
+    { id: 'question', emoji: '❓', label: 'Question' },
+  ];
+  function reactionLabel(kind) { return REACTIONS.find((item) => item.id === kind)?.label || 'Reaction'; }
   function isMyReaction(row) {
     if (!row) return false;
     if (state.profile?.id && row.user_id === state.profile.id) return true;
@@ -274,13 +283,19 @@
   function reactionsFor(type, id) {
     return (state.reactions || []).filter((row) => row.target_type === type && row.target_id === id);
   }
+  function reactionNames(type, id, kinds) {
+    const allow = new Set(kinds);
+    return [...new Set(reactionsFor(type, id).filter((row) => allow.has(row.kind || 'gotit')).map((row) => row.actor_name).filter(Boolean))];
+  }
   function gotItHtml(type, id, jobId) {
     const rows = reactionsFor(type, id);
-    const mine = rows.some(isMyReaction);
-    const names = rows.map((row) => row.actor_name).filter(Boolean);
-    const who = names.length ? names.join(', ') : 'No one yet';
-    return '<span class="gotit-wrap"><button type="button" class="gotit' + (mine ? ' on' : '') + '" data-react="' + esc(type) + '" data-id="' + esc(id) + '" data-job="' + esc(jobId) + '" aria-pressed="' + (mine ? 'true' : 'false') + '">Got it</button>' +
-      '<button type="button" class="gotit-count" aria-label="Who reacted: ' + esc(who) + '">' + rows.length + '<span class="gotit-who">' + esc(who) + '</span></button></span>';
+    return '<span class="react-bar">' + REACTIONS.map((kind) => {
+      const mine = rows.some((row) => (row.kind || 'gotit') === kind.id && isMyReaction(row));
+      const names = rows.filter((row) => (row.kind || 'gotit') === kind.id).map((row) => row.actor_name).filter(Boolean);
+      const who = names.length ? names.join(', ') : 'No one yet';
+      const count = names.length ? '<button type="button" class="react-n" aria-label="' + esc(kind.label) + ': ' + esc(who) + '">' + names.length + '<span class="react-who">' + esc(kind.label) + ': ' + esc(who) + '</span></button>' : '';
+      return '<span class="react-pick"><button type="button" class="react kind-' + kind.id + (mine ? ' on' : '') + '" data-react="' + esc(type) + '" data-id="' + esc(id) + '" data-job="' + esc(jobId) + '" data-kind="' + kind.id + '" aria-pressed="' + (mine ? 'true' : 'false') + '" aria-label="' + esc(kind.label) + '" title="' + esc(kind.label) + '">' + kind.emoji + '</button>' + count + '</span>';
+    }).join('') + '</span>';
   }
   function paintOpenJob() {
     const openId = document.querySelector('#job-overlay')?.dataset.jobId;
@@ -289,28 +304,33 @@
     const job = activeList().find((item) => item.id === openId);
     if (job) showJobModal(job);
   }
-  async function toggleReaction(type, id, jobId) {
+  function noteConcern(row) {
+    if (!row || row.kind !== 'concern' || row.target_type !== 'step' || !canSeeDash()) return;
+    if (state.profile?.id && row.user_id === state.profile.id) return;
+    const job = activeList().find((item) => item.id === row.job_id) || state.jobs.find((item) => item.id === row.job_id);
+    const step = job?.steps?.find((item) => item.id === row.target_id);
+    const text = (job?.wo_number || 'Job') + (step ? ' — ' + step.label : '') + (row.actor_name ? ' · ' + row.actor_name : '');
+    toast('Concern: ' + text);
+    notify('Concern on a step', text);
+  }
+  async function toggleReaction(type, id, jobId, kind) {
+    kind = kind || 'gotit';
     if (!state.user || !type || !id) return;
-    const mine = reactionsFor(type, id).find(isMyReaction);
+    const mine = reactionsFor(type, id).find((row) => (row.kind || 'gotit') === kind && isMyReaction(row));
     const on = !mine;
-    if (state.demoOn) {
-      state.reactions = reactionsFor(type, id).some(isMyReaction)
-        ? state.reactions.filter((row) => !(row.target_type === type && row.target_id === id && isMyReaction(row)))
-        : (state.reactions || []).concat([{ id: 'demo-r-' + Date.now(), target_type: type, target_id: id, job_id: jobId, user_id: 'demo-me', actor_name: state.user.name, created_at: new Date().toISOString() }]);
-      paintOpenJob();
-      return;
-    }
-    state.reactions = (state.reactions || []).filter((row) => !(row.target_type === type && row.target_id === id && isMyReaction(row)));
-    if (on) state.reactions.push({ id: 'local-' + type + '-' + id, target_type: type, target_id: id, job_id: jobId, user_id: state.profile?.id || null, actor_name: state.user.name, created_at: new Date().toISOString() });
+    const row = { id: 'local-' + type + '-' + id + '-' + kind, kind, target_type: type, target_id: id, job_id: jobId, user_id: state.demoOn ? 'demo-me' : (state.profile?.id || null), actor_name: state.user.name, created_at: new Date().toISOString() };
+    state.reactions = (state.reactions || []).filter((item) => !(item.target_type === type && item.target_id === id && (item.kind || 'gotit') === kind && isMyReaction(item)));
+    if (on) state.reactions.push(row);
     paintOpenJob();
+    if (state.demoOn) return;
     if (!navigator.onLine) {
-      await queueOffline({ id: 'react-' + type + '-' + id, kind: 'reaction', at: Date.now(), targetType: type, targetId: id, jobId, on });
-      toast(on ? 'Got it saved on this device' : 'Got it removed on this device');
+      await queueOffline({ id: 'react-' + type + '-' + id + '-' + kind, kind: 'reaction', at: Date.now(), targetType: type, targetId: id, jobId, reactKind: kind, on });
+      toast((on ? '' : 'Removed ') + reactionLabel(kind) + ' on this device');
       return;
     }
     const result = on
-      ? await sb.from('reactions').insert({ target_type: type, target_id: id, job_id: jobId })
-      : await sb.from('reactions').delete().eq('target_type', type).eq('target_id', id);
+      ? await sb.from('reactions').insert({ target_type: type, target_id: id, job_id: jobId, kind })
+      : await sb.from('reactions').delete().eq('target_type', type).eq('target_id', id).eq('kind', kind);
     if (result.error) {
       toast(result.error.message);
       refreshAll(false);
@@ -441,7 +461,7 @@
     const { data: steps } = await sb.from('steps').select('*, step_assignees(*)').in('job_id', ids).order('sort_order');
     const { data: comments } = await sb.from('comments').select('*').in('job_id', ids).order('created_at');
     const { data: audits } = await sb.from('audit_log').select('*').in('job_id', ids).order('created_at', { ascending: false }).limit(500);
-    const rx = await sb.from('reactions').select('id,target_type,target_id,job_id,user_id,actor_name,created_at').in('job_id', ids);
+    const rx = await sb.from('reactions').select('id,kind,target_type,target_id,job_id,user_id,actor_name,created_at').in('job_id', ids);
     state.reactions = rx.error ? (state.reactions || []) : (rx.data || []);
     state.jobs = jobs.map((j) => ({
       ...j,
@@ -522,7 +542,11 @@
       .on('postgres_changes', { event: '*', schema: 'public', table: 'turnarounds' }, () => { if (state.view === 'turn') renderTurnaround(); })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'turnaround_jobs' }, () => { if (state.view === 'turn') renderTurnaround(); })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'unit_safety' }, () => loadSafety().then(() => { if (state.view === 'safety') renderSafety(); }))
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, () => { if (!state.demoOn) refreshLive(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'reactions' }, (payload) => {
+        if (state.demoOn) return;
+        if (payload.eventType === 'INSERT') noteConcern(payload.new);
+        refreshLive();
+      })
       .subscribe((status) => {
         if (!navigator.onLine) setLiveStatus('offline');
         else setLiveStatus(status === 'SUBSCRIBED' ? 'live' : 'reconnecting');
@@ -2487,11 +2511,17 @@
     const block = (title, rows) => '<h3>' + title + ' (' + rows.length + ')</h3>' + (rows.map((j) => {
       const signs = (j.steps || []).flatMap((s) => (s.assignees || []).filter((a) => a.signed_off).map((a) => s.trade + ': ' + a.person_name));
       const notes = (j.comments || []).slice(-3).map((c) => c.author_name + ': ' + c.body).join(' | ');
-      const jobAck = reactionsFor('job', j.id).map((row) => row.actor_name).filter(Boolean);
-      const stepAck = (j.steps || []).flatMap((step) => reactionsFor('step', step.id).map((row) => step.label + ': ' + row.actor_name));
-      const noteAck = (j.comments || []).flatMap((comment) => reactionsFor('comment', comment.id).map((row) => row.actor_name));
-      const ack = [jobAck.length ? 'Job acknowledged by ' + jobAck.join(', ') : '', stepAck.length ? 'Steps acknowledged by ' + stepAck.join('; ') : '', noteAck.length ? 'Notes acknowledged by ' + [...new Set(noteAck)].join(', ') : ''].filter(Boolean).join('<br>');
-      return '<p><strong>' + esc(j.wo_number) + '</strong> ' + esc(j.title) + ' · ' + esc(j.unit || '') + (j.on_hold ? ' · BLOCKED ' + esc(j.hold_reason || '') : '') + '<br>Signed: ' + esc(signs.join(', ') || '—') + (notes ? '<br>Notes: ' + esc(notes) : '') + (ack ? '<br>' + esc(ack).replaceAll('&lt;br&gt;', '<br>') : '') + '</p>';
+      const pieces = [{ type: 'job', id: j.id, label: '' }].concat((j.steps || []).map((step) => ({ type: 'step', id: step.id, label: step.label }))).concat((j.comments || []).map((comment) => ({ type: 'comment', id: comment.id, label: 'Note' })));
+      const ack = pieces.flatMap((piece) => {
+        const names = reactionNames(piece.type, piece.id, ['gotit', 'done']);
+        return names.length ? [(piece.label ? piece.label + ' acknowledged by ' : 'Acknowledged by ') + names.join(', ')] : [];
+      });
+      const concerns = pieces.flatMap((piece) => {
+        const names = reactionNames(piece.type, piece.id, ['concern']);
+        return names.length ? ['Concern' + (piece.label ? ' on ' + piece.label : '') + ': ' + names.join(', ')] : [];
+      });
+      const ackLine = ack.concat(concerns).join('<br>');
+      return '<p><strong>' + esc(j.wo_number) + '</strong> ' + esc(j.title) + ' · ' + esc(j.unit || '') + (j.on_hold ? ' · BLOCKED ' + esc(j.hold_reason || '') : '') + '<br>Signed: ' + esc(signs.join(', ') || '—') + (notes ? '<br>Notes: ' + esc(notes) : '') + (ackLine ? '<br>' + esc(ackLine).replaceAll('&lt;br&gt;', '<br>') : '') + '</p>';
     }).join('') || '<p>None.</p>');
     return '<h2>Beamlock shift handover</h2><p>' + esc(new Date().toLocaleString()) + ' · ' + esc(state.user?.name || '') + '</p>' + block('Completed', done) + block('Open', open) + block('Blocked', blocked);
   }
@@ -2545,9 +2575,13 @@
       turnaround_jobs: state.demoJobs.map((j) => ({ job_id: j.id })),
     };
     state.turnaroundId = 'demo-ta';
+    const now = new Date().toISOString();
     state.reactions = [
-      { id: 'demo-r1', target_type: 'step', target_id: 'demo-hmu-1', job_id: 'demo-hmu', user_id: 'demo-sup', actor_name: 'Demo Supervisor', created_at: new Date().toISOString() },
-      { id: 'demo-r2', target_type: 'comment', target_id: 'demo-c1', job_id: 'demo-sru', user_id: 'demo-op', actor_name: 'Demo Operator', created_at: new Date().toISOString() },
+      { id: 'demo-r1', kind: 'gotit', target_type: 'step', target_id: 'demo-hmu-1', job_id: 'demo-hmu', user_id: 'demo-sup', actor_name: 'Demo Supervisor', created_at: now },
+      { id: 'demo-r2', kind: 'done', target_type: 'step', target_id: 'demo-hmu-1', job_id: 'demo-hmu', user_id: 'demo-ins', actor_name: 'Demo Insulator', created_at: now },
+      { id: 'demo-r3', kind: 'concern', target_type: 'step', target_id: 'demo-hmu-1', job_id: 'demo-hmu', user_id: 'demo-op', actor_name: 'Demo Operator', created_at: now },
+      { id: 'demo-r4', kind: 'question', target_type: 'comment', target_id: 'demo-c1', job_id: 'demo-sru', user_id: 'demo-op', actor_name: 'Demo Operator', created_at: now },
+      { id: 'demo-r5', kind: 'clap', target_type: 'comment', target_id: 'demo-c1', job_id: 'demo-sru', user_id: 'demo-sup', actor_name: 'Demo Supervisor', created_at: now },
     ];
   }
   function startDemo() {
@@ -2717,8 +2751,8 @@
           if (ins.error) break;
         } else if (item.kind === 'reaction') {
           const result = item.on
-            ? await sb.from('reactions').insert({ target_type: item.targetType, target_id: item.targetId, job_id: item.jobId })
-            : await sb.from('reactions').delete().eq('target_type', item.targetType).eq('target_id', item.targetId);
+            ? await sb.from('reactions').insert({ target_type: item.targetType, target_id: item.targetId, job_id: item.jobId, kind: item.reactKind || 'gotit' })
+            : await sb.from('reactions').delete().eq('target_type', item.targetType).eq('target_id', item.targetId).eq('kind', item.reactKind || 'gotit');
           if (result.error && !/duplicate|unique/i.test(result.error.message || '')) break;
         }
         await new Promise((resolve) => {
@@ -2779,6 +2813,7 @@
       '<div><strong>Unit muster point</strong><div>' + (row?.muster_unit ? esc(row.muster_unit) : blank) + '</div></div>' +
       '<div><strong>Site muster point</strong><div>' + (row?.muster_site ? esc(row.muster_site) : blank) + '</div></div>' +
       '<div><strong>Unit phones</strong>' + (phones.length ? phones.map((p) => '<div><a href="tel:' + esc(String(p.number || '').replace(/[^\d+]/g, '')) + '">' + esc(p.name || 'Phone') + ' · ' + esc(p.number || '') + '</a></div>').join('') : '<div>' + blank + '</div>') + '</div>' +
+      '<div><strong>Firehall number</strong><div>' + (row?.firehall_number ? '<a href="tel:' + esc(String(row.firehall_number).replace(/[^\d+]/g, '')) + '">' + esc(row.firehall_number) + '</a>' : blank) + '</div></div>' +
       '<div><strong>Safety showers and eyewash</strong>' + (showers.length ? showers.map((s) => '<div>' + esc(s.id || 'Shower') + ' — ' + esc(s.location || '') + '</div>').join('') : '<div>' + blank + '</div>') + '</div>' +
       '<div><strong>Notes</strong><div>' + (row?.notes ? esc(row.notes) : blank) + '</div></div>' +
       (row?.map_path ? '<img class="thumb" alt="Map" data-raw="' + esc(row.map_path) + '" src="" />' : '<div><strong>Map photo</strong><div>' + blank + '</div></div>') +
@@ -2787,6 +2822,7 @@
         '<label class="lbl">Unit muster point</label><input class="input" name="muster_unit" value="' + esc(row?.muster_unit || '') + '" />' +
         '<label class="lbl">Site muster point</label><input class="input" name="muster_site" value="' + esc(row?.muster_site || '') + '" />' +
         '<label class="lbl">Phones, one per line: name | number</label><textarea class="textarea" name="phones">' + esc(phones.map((p) => (p.name || '') + ' | ' + (p.number || '')).join('\n')) + '</textarea>' +
+        '<label class="lbl">Firehall number</label><input class="input" name="firehall_number" value="' + esc(row?.firehall_number || '') + '" />' +
         '<label class="lbl">Showers, one per line: ID | location</label><textarea class="textarea" name="showers">' + esc(showers.map((s) => (s.id || '') + ' | ' + (s.location || '')).join('\n')) + '</textarea>' +
         '<label class="lbl">Notes</label><textarea class="textarea" name="notes">' + esc(row?.notes || '') + '</textarea>' +
         '<label class="lbl">Map photo</label><input type="file" name="map" accept="image/*" />' +
@@ -2807,7 +2843,7 @@
         if (up.error) return toast(up.error.message);
         mapPath = 'comment-photos/' + path;
       }
-      const payload = { unit, muster_unit: form.muster_unit.value.trim(), muster_site: form.muster_site.value.trim(), phones: phonesNext, showers: showersNext, notes: form.notes.value.trim(), map_path: mapPath, updated_at: new Date().toISOString(), updated_by: state.user.name };
+      const payload = { unit, muster_unit: form.muster_unit.value.trim(), muster_site: form.muster_site.value.trim(), phones: phonesNext, showers: showersNext, firehall_number: form.firehall_number.value.trim(), notes: form.notes.value.trim(), map_path: mapPath, updated_at: new Date().toISOString(), updated_by: state.user.name };
       const { error } = await sb.from('unit_safety').upsert(payload);
       if (error) return toast(error.message);
       await loadSafety();
@@ -3082,10 +3118,10 @@
       } catch (e) { toast(e.message); }
     };
     document.addEventListener('click', (e) => {
-      const count = e.target.closest('.gotit-count');
+      const count = e.target.closest('.react-n');
       if (count) { count.classList.toggle('open'); return; }
-      const react = e.target.closest('[data-react]');
-      if (react) { toggleReaction(react.dataset.react, react.dataset.id, react.dataset.job); return; }
+      const react = e.target.closest('[data-kind]');
+      if (react) { toggleReaction(react.dataset.react, react.dataset.id, react.dataset.job, react.dataset.kind); return; }
       const safety = e.target.closest('[data-card-safety]');
       if (safety) { state.safetyUnit = safety.dataset.cardSafety || ''; setView('safety'); return; }
       const card = e.target.closest('.job-card');

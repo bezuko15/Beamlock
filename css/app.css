@@ -75,18 +75,25 @@ html.hc .wx-chip.gust-red { background: #000; color: #ffcc00; border-color: #ffc
 .wx-gust.amber { background: #ffcc00; color: #1a1208; font-weight: 800; }
 .wx-gust.red { background: #7f1d1d; color: #fff; font-weight: 800; }
 html.hc .wx-gust.amber, html.hc .wx-gust.red { background: #000; color: #ffcc00; }
-.gotit-wrap { position: relative; display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; }
-.gotit, .gotit-count { min-height: 36px; min-width: 36px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel2); color: var(--text); font-size: 13px; font-weight: 800; cursor: pointer; }
-.gotit.on { background: #1f7a4c; color: #fff; border-color: #1f7a4c; }
-.gotit-count { position: relative; background: var(--panel); }
-.gotit-who {
+.react-bar { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; align-items: center; }
+.react-pick { position: relative; display: inline-flex; }
+.react, .react-n {
+  min-height: 32px; min-width: 32px; padding: 2px 7px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--panel2); color: var(--text);
+  font-size: 14px; font-weight: 800; cursor: pointer; line-height: 1.2;
+}
+.react.on { background: #e7f6ee; border-color: #1f7a4c; }
+.react.kind-concern.on { background: #fde8e6; border-color: #b42318; }
+.react-n { border-left: 0; border-radius: 0 999px 999px 0; margin-left: -8px; padding-left: 10px; background: var(--panel); }
+.react-who {
   display: none; position: absolute; z-index: 6; left: 0; top: calc(100% + 4px);
-  min-width: 140px; max-width: 240px; background: #1a2332; color: #fff;
+  min-width: 140px; max-width: 220px; background: #1a2332; color: #fff;
   padding: 8px 10px; border-radius: 8px; font-size: 12px; font-weight: 650; white-space: normal; text-align: left;
 }
-.gotit-count:hover .gotit-who, .gotit-count:focus .gotit-who, .gotit-count.open .gotit-who { display: block; }
-html.hc .gotit.on { background: #ffcc00; color: #000; border-color: #000; }
-html.hc .gotit-who { background: #000; color: #ffcc00; border: 2px solid #ffcc00; }
+.react-pick:hover .react-who, .react-n:focus .react-who, .react-n.open .react-who { display: block; }
+html.hc .react.on { background: #ffcc00; color: #000; border-color: #000; }
+html.hc .react.kind-concern.on { background: #000; color: #ffcc00; border-color: #ffcc00; }
+html.hc .react-who { background: #000; color: #ffcc00; border: 2px solid #ffcc00; }
 .header-actas { display: inline-flex; align-items: center; gap: 6px; background: #fff; color: #1a2332; border: 2px solid #fff; border-radius: 10px; padding: 4px 8px; font-weight: 800; font-size: 13px; }
 .header-actas select { min-height: 36px; border: 0; background: transparent; color: #1a2332; font-weight: 800; }
 html.hc .header-actas, html.hc .header-actas select { background: #ffcc00; color: #000; border-color: #fff; }
