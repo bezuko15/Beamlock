@@ -167,31 +167,38 @@
     }
     return html;
   }
-  function groupedSectionsHtml(jobs, gridClass) {
+  function groupedSectionsHtml(jobs, gridClass, opts) {
     const used = new Set();
-    let html = '';
     const grid = 'job-grid' + (gridClass ? ' ' + gridClass : '');
+    const order = new Map(jobs.map((j, i) => [j.id, i]));
+    const sections = [];
     for (const site of getSites()) {
       for (const pu of site.processUnits) {
         const blocks = [];
         let n = 0;
+        let rank = Infinity;
         for (const unitName of pu.units) {
           const canon = normalizeUnit(unitName) || unitName;
           const group = jobs.filter((j) => normalizeUnit(j.unit) === canon);
           if (!group.length) continue;
+          const unitRank = Math.min(...group.map((j) => order.get(j.id) ?? Infinity));
           group.forEach((j) => used.add(j.id));
+          rank = Math.min(rank, unitRank);
           n += group.length;
-          blocks.push('<div class="unit-section"><div class="unit-section-head"><span>' + esc(canon) + '</span><span class="count">' + group.length + '</span></div><div class="' + grid + '">' + group.map(jobCard).join('') + '</div></div>');
+          blocks.push({ rank: unitRank, html: '<div class="unit-section"><div class="unit-section-head"><span>' + esc(canon) + '</span><span class="count">' + group.length + '</span></div><div class="' + grid + '">' + group.map(jobCard).join('') + '</div></div>' });
         }
         if (!n) continue;
-        html += '<section class="pu-section"><div class="pu-section-head"><span>' + esc(site.name) + ' · ' + esc(pu.name) + '</span><span class="count">' + n + '</span></div>' + blocks.join('') + '</section>';
+        if (opts && opts.followOrder) blocks.sort((a, b) => a.rank - b.rank);
+        sections.push({ rank, html: '<section class="pu-section"><div class="pu-section-head"><span>' + esc(site.name) + ' · ' + esc(pu.name) + '</span><span class="count">' + n + '</span></div>' + blocks.map((b) => b.html).join('') + '</section>' });
       }
     }
     const other = jobs.filter((j) => !used.has(j.id));
     if (other.length) {
-      html += '<section class="pu-section"><div class="pu-section-head"><span>Other / unassigned</span><span class="count">' + other.length + '</span></div><div class="' + grid + '">' + other.map(jobCard).join('') + '</div></section>';
+      const rank = Math.min(...other.map((j) => order.get(j.id) ?? Infinity));
+      sections.push({ rank, html: '<section class="pu-section"><div class="pu-section-head"><span>Other / unassigned</span><span class="count">' + other.length + '</span></div><div class="' + grid + '">' + other.map(jobCard).join('') + '</div></section>' });
     }
-    return html;
+    if (opts && opts.followOrder) sections.sort((a, b) => a.rank - b.rank);
+    return sections.map((s) => s.html).join('');
   }
   function unitCounts(jobs, units) {
     const list = units || getUnits();
@@ -921,18 +928,154 @@
     }
     return keys;
   }
+  const SITE_ZONE = 'America/Edmonton';
+  function siteTodayKey() {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: SITE_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  }
+  function keyFromParts(y, m, d) {
+    return String(y).padStart(4, '0') + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+  }
+  function parseCalendarKey(value) {
+    const s = String(value || '').trim();
+    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return keyFromParts(+m[1], +m[2], +m[3]);
+    m = s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (m) return keyFromParts(+m[3], +m[1], +m[2]);
+    return '';
+  }
+  function keyFromInstant(iso, zone) {
+    const d = new Date(iso);
+    if (!iso || Number.isNaN(d.getTime())) return '';
+    return new Intl.DateTimeFormat('en-CA', { timeZone: zone || SITE_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  }
+  function addDays(key, n) {
+    const [y, m, d] = String(key || siteTodayKey()).split('-').map(Number);
+    return new Date(Date.UTC(y, (m || 1) - 1, (d || 1) + n)).toISOString().slice(0, 10);
+  }
+  function mondayOf(key) {
+    const [y, m, d] = String(key || siteTodayKey()).split('-').map(Number);
+    const date = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
+    const day = date.getUTCDay() || 7;
+    date.setUTCDate(date.getUTCDate() - (day - 1));
+    return date.toISOString().slice(0, 10);
+  }
+  function fmtDayKey(key) {
+    if (!key) return '';
+    const [y, m, d] = key.split('-').map(Number);
+    const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' }).formatToParts(new Date(Date.UTC(y, m - 1, d, 12)));
+    const g = (t) => parts.find((p) => p.type === t)?.value || '';
+    return g('day') + ' ' + g('month') + ' ' + g('year');
+  }
+  function stepPlanKey(step) {
+    return parseCalendarKey(step?.beam?.earlyStart) || keyFromInstant(step?.beam?.earlyStartIso, SITE_ZONE);
+  }
+  function planWindow(job) {
+    const fromSteps = (job?.steps || []).map(stepPlanKey).filter(Boolean).sort();
+    if (fromSteps.length) return { start: fromSteps[0], end: fromSteps[fromSteps.length - 1], source: 'schedule' };
+    if (job?.beam?.source === 'beam') return { start: '', end: '', source: '' };
+    let start = parseCalendarKey(job?.beam?.plannedStart);
+    let end = parseCalendarKey(job?.beam?.plannedEnd);
+    if (!start && !end) start = parseCalendarKey(job?.job_date);
+    if (!start && !end) return { start: '', end: '', source: '' };
+    if (!start) start = end;
+    if (!end) end = start;
+    return start <= end ? { start, end, source: 'manual' } : { start: end, end: start, source: 'manual' };
+  }
+  function dueKey(job) {
+    return keyFromInstant(job?.beam?.dueDate, SITE_ZONE);
+  }
+  function scheduleLabel(job) {
+    const w = planWindow(job);
+    if (!w.start) return 'Not scheduled';
+    if (w.start === w.end) return fmtDayKey(w.start);
+    return fmtDayKey(w.start) + ' – ' + fmtDayKey(w.end);
+  }
+  function scheduleHtml(job, detail) {
+    const none = !planWindow(job).start;
+    const line = '<div class="schedule-line' + (none ? ' none' : '') + '"><span class="k">Scheduled</span>' + esc(scheduleLabel(job)) + '</div>';
+    if (!detail) return line;
+    const due = dueKey(job);
+    return '<div class="schedule-detail">' + line +
+      '<div class="schedule-line"><span class="k">Due</span>' + esc(due ? fmtDayKey(due) : '—') + '</div>' +
+      '<div class="schedule-line"><span class="k">Added</span>' + esc(job.created_at ? fmtTime(job.created_at) : '—') + '</div></div>';
+  }
+  function windowRange() {
+    const anchor = state.filters.anchor || siteTodayKey();
+    const span = state.filters.span || '';
+    if (span === 'day') return { start: anchor, end: anchor, label: fmtDayKey(anchor) };
+    if (span === 'week') {
+      const start = mondayOf(anchor);
+      return { start, end: addDays(start, 6), label: 'Week of ' + fmtDayKey(start) };
+    }
+    if (span === 'month') {
+      const [y, m] = anchor.split('-').map(Number);
+      const start = keyFromParts(y, m, 1);
+      const end = addDays(keyFromParts(y, m + 1, 1), -1);
+      const label = new Intl.DateTimeFormat('en-CA', { timeZone: 'UTC', month: 'long', year: 'numeric' }).format(new Date(Date.UTC(y, m - 1, 1, 12)));
+      return { start, end, label };
+    }
+    return null;
+  }
+  function planOverlaps(job, range) {
+    const w = planWindow(job);
+    if (!w.start || !range) return false;
+    return w.start <= range.end && w.end >= range.start;
+  }
+  function compareJobs(a, b) {
+    if (state.filters.sort === 'scheduled') {
+      const as = planWindow(a).start || '9999-99-99';
+      const bs = planWindow(b).start || '9999-99-99';
+      if (as !== bs) return as < bs ? -1 : 1;
+    }
+    const ac = a.created_at || '';
+    const bc = b.created_at || '';
+    if (ac !== bc) return ac < bc ? 1 : -1;
+    return String(b.id || '').localeCompare(String(a.id || ''));
+  }
+  function applyDateAndSort(list) {
+    let out = list.slice();
+    const span = state.filters.span || '';
+    if (span === 'unscheduled') out = out.filter((j) => !planWindow(j).start);
+    else if (span) out = out.filter((j) => planOverlaps(j, windowRange()));
+    out.sort(compareJobs);
+    return out;
+  }
+  function dateNavHtml() {
+    const span = state.filters.span || '';
+    const range = windowRange();
+    const on = (value) => (value === 'all' ? !span : span === value) ? ' on' : '';
+    const btn = (value, label) => '<button type="button" class="btn btn-sm' + on(value) + '" data-span="' + value + '">' + label + '</button>';
+    const label = !span ? 'All dates, including jobs that are not scheduled' : (span === 'unscheduled' ? 'Not scheduled' : range.label);
+    const locked = !span || span === 'unscheduled';
+    return btn('all', 'All dates') + btn('day', 'Day') + btn('week', 'Week') + btn('month', 'Month') + btn('unscheduled', 'Unscheduled') +
+      '<div class="date-move"><button type="button" class="btn btn-sm" data-date-step="-1" aria-label="Previous"' + (locked ? ' disabled' : '') + '>‹</button>' +
+      '<span class="date-window">' + esc(label) + '</span>' +
+      '<button type="button" class="btn btn-sm" data-date-step="1" aria-label="Next"' + (locked ? ' disabled' : '') + '>›</button>' +
+      '<button type="button" class="btn btn-sm" data-date-today>Today</button></div>' +
+      '<label class="date-sort">Sort <select class="select" data-job-sort aria-label="Sort jobs"><option value="">Newest added</option><option value="scheduled"' + (state.filters.sort === 'scheduled' ? ' selected' : '') + '>Scheduled date</option></select></label>';
+  }
+  function renderDateNav() {
+    ['date-nav', 'history-date-nav'].forEach((id) => { const el = document.getElementById(id); if (el) el.innerHTML = dateNavHtml(); });
+  }
+  function shiftAnchor(dir) {
+    const span = state.filters.span;
+    const anchor = state.filters.anchor || siteTodayKey();
+    if (span === 'day') state.filters.anchor = addDays(anchor, dir);
+    else if (span === 'week') state.filters.anchor = addDays(mondayOf(anchor), dir * 7);
+    else if (span === 'month') {
+      const [y, m] = anchor.split('-').map(Number);
+      state.filters.anchor = new Date(Date.UTC(y, m - 1 + dir, 1)).toISOString().slice(0, 10);
+    }
+  }
   function jobDateKeys(job) {
     const keys = [];
+    const plan = planWindow(job);
+    if (plan.start) keys.push(plan.start);
+    if (plan.end && plan.end !== plan.start) keys.push(plan.end);
     if (job.job_date) keys.push(String(job.job_date).slice(0, 10));
     if (job.beam?.dueDate) {
-      const due = new Date(job.beam.dueDate);
-      if (!Number.isNaN(due.getTime())) keys.push(edmontonParts(due).dayKey);
-    }
-    for (const step of job.steps || []) {
-      const iso = step.beam?.earlyStartIso;
-      if (!iso) continue;
-      const when = new Date(iso);
-      if (!Number.isNaN(when.getTime())) keys.push(edmontonParts(when).dayKey);
+      const due = dueKey(job);
+      if (due) keys.push(due);
     }
     return keys;
   }
@@ -950,22 +1093,25 @@
   }
   function rememberFilters() {
     if (!state.user?.name) return;
-    const { q, status, priority, trade, unit, pu, when } = state.filters;
-    localStorage.setItem('bl_filters_' + state.user.name, JSON.stringify({ q, status, priority, trade, unit, pu, when }));
+    const { q, status, priority, trade, unit, pu, span, anchor, sort } = state.filters;
+    localStorage.setItem('bl_filters_' + state.user.name, JSON.stringify({ q, status, priority, trade, unit, pu, span: span || '', anchor: anchor || '', sort: sort || '' }));
   }
   function restoreFilters() {
     try {
       const saved = JSON.parse(localStorage.getItem('bl_filters_' + (state.user?.name || '')) || 'null');
       if (!saved) return;
-      state.filters = { q: '', status: '', priority: '', trade: '', unit: '', pu: '', when: '', ...saved };
+      if (!saved.span && saved.when === 'today') saved.span = 'day';
+      if (!saved.span && saved.when === 'week') saved.span = 'week';
+      state.filters = { q: '', status: '', priority: '', trade: '', unit: '', pu: '', span: '', anchor: '', sort: '', ...saved };
+      if (!state.filters.anchor) state.filters.anchor = siteTodayKey();
     } catch { /* ignore */ }
   }
   function syncFilterControls() {
     if ($('#search')) $('#search').value = state.filters.q || '';
     if ($('#filter-status')) $('#filter-status').value = state.filters.status || '';
     if ($('#filter-priority')) $('#filter-priority').value = state.filters.priority || '';
-    if ($('#filter-when')) $('#filter-when').value = state.filters.when || '';
     renderTradeFilter();
+    renderDateNav();
   }
 
   function filteredJobs() {
@@ -984,17 +1130,7 @@
     if (trade) list = list.filter((j) => j.steps.some((s) => s.trade === trade));
     if (pu) list = list.filter((j) => puForUnit(j.unit).pu === pu);
     if (unit) list = list.filter((j) => normalizeUnit(j.unit) === unit);
-    if (state.filters.when) {
-      const today = edmontonParts(new Date()).dayKey;
-      const week = new Set(weekKeys(today));
-      const current = isoWeekFromKey(today);
-      list = list.filter((j) => {
-        const dates = jobDateKeys(j);
-        if (state.filters.when === 'today') return dates.includes(today);
-        return dates.some((d) => week.has(d)) || samePlanningWeek(j.beam?.planningWeek, current);
-      });
-    }
-    return list;
+    return applyDateAndSort(list);
   }
 
   function jobCard(job) {
@@ -1019,6 +1155,7 @@
       (job.demo ? '<span class="chip hot">DEMO</span>' : '') +
       '<span class="chip">' + esc(job.priority) + '</span>' +
       (due ? '<span class="chip ' + due.cls + '">' + esc(due.label) + '</span>' : '') +
+      '</div>' + scheduleHtml(job) + '<div class="meta">' +
       (wait ? '<span class="chip hot" style="--tc:' + esc(tradeColor(wait.trade)) + '">Waiting: ' + esc(tradeLabel(wait.trade)) + '</span>' : '') +
       (mine ? '<span class="chip hot">YOUR TURN</span>' : '') +
       '</div>' +
@@ -1072,18 +1209,24 @@
     if (puEl) puEl.innerHTML = puTabsHtml(savedPu, forPu, 'jobs');
     if (el) el.innerHTML = unitTabsHtml(savedUnit, forUnits, 'jobs', unitsForPu(savedPu));
   }
+  function emptyScheduleCopy() {
+    const span = state.filters.span || '';
+    if (span === 'unscheduled') return '<div class="empty"><strong>No unscheduled jobs</strong><p>Every job in this list has a planned date.</p></div>';
+    if (span) return '<div class="empty"><strong>Nothing scheduled in ' + esc(windowRange().label) + '</strong><p>Unscheduled jobs stay under All dates.</p></div>';
+    return '<div class="empty"><strong>No jobs match</strong><p>Try an order number or functional location, or clear the filters.</p></div>';
+  }
   function renderJobList() {
+    const y = window.scrollY;
+    renderDateNav();
     renderUnitTabs();
     renderUnitFilterSelect();
     renderTradeFilter();
     const list = filteredJobs();
     const host = $('#job-list');
-    if (!list.length) { host.innerHTML = '<div class="empty"><strong>No jobs match</strong><p>Try an order number or functional location, or clear the filters.</p></div>'; return; }
-    if (state.filters.unit) {
-      host.innerHTML = list.map(jobCard).join('');
-      return;
-    }
-    host.innerHTML = groupedSectionsHtml(list, '') || '<div class="empty">No jobs match.</div>';
+    if (!list.length) host.innerHTML = emptyScheduleCopy();
+    else if (state.filters.unit) host.innerHTML = list.map(jobCard).join('');
+    else host.innerHTML = groupedSectionsHtml(list, '', { followOrder: true }) || emptyScheduleCopy();
+    if (Math.abs(window.scrollY - y) > 1) window.scrollTo(0, y);
   }
   function nameIs(value) {
     return String(value || '').trim().toLowerCase() === String(state.user?.name || '').trim().toLowerCase() && !!state.user?.name;
@@ -1107,8 +1250,11 @@
   function renderHistory() {
     const host = $('#history-list');
     if (!host) return;
-    const list = activeList().filter(isMyHistory);
-    host.innerHTML = list.length ? list.map((job) => '<div class="history-job"><div class="meta" style="margin-bottom:6px"><span class="chip">' + esc(myJobNote(job)) + '</span></div>' + jobCard(job) + '</div>').join('') : '<div class="empty"><strong>No jobs yet</strong><p>Sign off, comment, or create a job and it will show up here under your name.</p></div>';
+    const y = window.scrollY;
+    renderDateNav();
+    const list = applyDateAndSort(activeList().filter(isMyHistory));
+    host.innerHTML = list.length ? list.map((job) => '<div class="history-job"><div class="meta" style="margin-bottom:6px"><span class="chip">' + esc(myJobNote(job)) + '</span></div>' + jobCard(job) + '</div>').join('') : (state.filters.span ? emptyScheduleCopy() : '<div class="empty"><strong>No jobs yet</strong><p>Sign off, comment, or create a job and it will show up here under your name.</p></div>');
+    if (Math.abs(window.scrollY - y) > 1) window.scrollTo(0, y);
   }
   function renderMine() {
     const list = activeList().filter(isMyTurn);
@@ -1616,6 +1762,7 @@
       '<div class="modal-head-actions"><button type="button" class="safety-link" data-open-safety="' + esc(job.unit || '') + '" aria-label="Safety for ' + esc(job.unit || 'this unit') + '"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 2.2 20 5.2v6.2c0 4.7-3.2 8-8 9.6-4.8-1.6-8-4.9-8-9.6V5.2L12 2.2z"/></svg> Safety</button><button class="btn btn-sm" id="close-modal">Close</button></div></div><div class="modal-body">' +
       (job.equipment_location ? '<div class="equip-loc"><span class="k">Equipment location</span><span class="v">' + esc(job.equipment_location) + '</span></div>' : '') +
       (job.on_hold ? '<div class="hold-banner">ON HOLD — ' + esc(job.hold_reason || '') + ' (' + esc(job.hold_by || '') + ')</div>' : '') +
+      scheduleHtml(job, true) +
       '<p style="color:var(--muted);margin-top:0">' + esc(job.description || '') + '</p>' +
       beamInfoHtml(job) +
       unitTapHtml(job) +
@@ -2066,7 +2213,7 @@
   function openJobEditor(existing) {
     const root = $('#modal-root');
     let steps = existing
-      ? existing.steps.map((s) => ({ trade: s.trade, label: s.label, assignees: (s.assignees || []).map((a) => ({ person_name: a.person_name, person_id: a.person_id, signed_off: a.signed_off, signed_at: a.signed_at })) }))
+      ? existing.steps.map((s) => ({ trade: s.trade, label: s.label, beam: s.beam || null, status: s.status, skip_reason: s.skip_reason, skipped_by: s.skipped_by, skipped_at: s.skipped_at, assignees: (s.assignees || []).map((a) => ({ person_name: a.person_name, person_id: a.person_id, signed_off: a.signed_off, signed_at: a.signed_at })) }))
       : TEMPLATES.full_valve.steps.map((s) => ({ ...s, assignees: defaultAssignees(s.trade) }));
     let addReverse = false;
     function renderEditor() {
@@ -2078,7 +2225,9 @@
         '<div><label class="lbl">Unit</label><select class="select" id="f-unit">' + getUnits().map((u) => '<option value="' + esc(u) + '"' + ((existing?.unit ? normalizeUnit(existing.unit) : getUnits()[0]) === u ? ' selected' : '') + '>' + esc(u) + '</option>').join('') + '</select></div>' +
         '<div><label class="lbl">Area</label><input class="input" id="f-area" value="' + esc(existing?.area || '') + '" /></div>' +
         '<div><label class="lbl">Equipment tag</label><input class="input" id="f-tag" value="' + esc(existing?.equipment_tag || '') + '" /></div>' +
-        '<div><label class="lbl">Date</label><input class="input" id="f-date" type="date" value="' + esc(existing?.job_date || new Date().toISOString().slice(0, 10)) + '" /></div>' +
+        (existing?.beam?.source === 'beam'
+          ? '<div style="grid-column:1/-1" class="pref-note">Scheduled ' + esc(scheduleLabel(existing)) + '. Due ' + esc(dueKey(existing) ? fmtDayKey(dueKey(existing)) : '—') + '. The maintenance schedule sets these. Re-import updates them.</div>'
+          : '<div><label class="lbl">Planned start</label><input class="input" id="f-plan-start" type="date" value="' + esc(parseCalendarKey(existing?.beam?.plannedStart) || parseCalendarKey(existing?.job_date) || '') + '" /></div><div><label class="lbl">Planned end</label><input class="input" id="f-plan-end" type="date" value="' + esc(parseCalendarKey(existing?.beam?.plannedEnd) || '') + '" /></div>') +
         '<div><label class="lbl">Permit #</label><input class="input" id="f-permit" value="' + esc(existing?.permit_number || '') + '" /></div>' +
         '<div><label class="lbl">LOTO</label><input class="input" id="f-loto" value="' + esc(existing?.loto_isolation || '') + '" /></div>' +
         '<div><label class="lbl">SAP work order</label><input class="input" id="f-sap-wo" value="' + esc(existing?.sap_work_order || existing?.wo_number || '') + '" /></div>' +
@@ -2105,15 +2254,20 @@
       $$('[data-label]', root).forEach((inp) => inp.onchange = () => { steps[+inp.dataset.label].label = inp.value; });
       $('#close-edit').onclick = () => { if (existing) showJobModal(existing); else root.innerHTML = ''; };
       $('#save-job').onclick = async () => {
+        const imported = existing?.beam?.source === 'beam';
+        const plannedStart = imported ? '' : ($('#f-plan-start')?.value || '');
+        const plannedEnd = imported ? '' : ($('#f-plan-end')?.value || '');
+        if (!imported && plannedStart && plannedEnd && plannedEnd < plannedStart) return toast('Planned end is before the start.');
+        const beam = imported ? (existing.beam || {}) : { ...(existing?.beam || {}), plannedStart, plannedEnd, source: (existing?.beam?.source) || 'manual' };
         const payload = {
           wo_number: $('#f-wo').value.trim() || 'WO-TBD', title: $('#f-title').value.trim() || 'Untitled',
           unit: normalizeUnit($('#f-unit').value.trim()), area: $('#f-area').value.trim(), equipment_tag: $('#f-tag').value.trim(),
-          priority: $('#f-pri').value, job_date: $('#f-date').value, permit_number: $('#f-permit').value.trim(),
+          priority: $('#f-pri').value, job_date: imported ? (existing.job_date || null) : (plannedStart || null), permit_number: $('#f-permit').value.trim(),
           loto_isolation: $('#f-loto').value.trim(), sap_work_order: $('#f-sap-wo').value.trim(),
           sap_notification: $('#f-sap-not').value.trim(), permit_vision_id: $('#f-pv').value.trim(),
           functional_location: $('#f-floc').value.trim(), pid_number: $('#f-pid').value.trim(),
           equipment_location: $('#f-loc').value.trim(), description: $('#f-desc').value.trim(),
-          updated_at: new Date().toISOString(),
+          beam, updated_at: new Date().toISOString(),
         };
         if (!steps.length) return toast('Add at least one trade step');
         try {
@@ -2128,7 +2282,7 @@
             if (error) throw error; jobId = job.id; await audit(jobId, 'job_created', 'Created ' + payload.wo_number);
           }
           for (let i = 0; i < steps.length; i++) {
-            const { data: step, error } = await sb.from('steps').insert({ job_id: jobId, trade: steps[i].trade, label: steps[i].label, sort_order: i, status: 'pending' }).select().single();
+            const { data: step, error } = await sb.from('steps').insert({ job_id: jobId, trade: steps[i].trade, label: steps[i].label, sort_order: i, status: steps[i].status || 'pending', beam: steps[i].beam || {}, skip_reason: steps[i].skip_reason || null, skipped_by: steps[i].skipped_by || null, skipped_at: steps[i].skipped_at || null }).select().single();
             if (error) throw error;
             const assignees = steps[i].assignees?.length ? steps[i].assignees : defaultAssignees(steps[i].trade);
             await sb.from('step_assignees').insert(assignees.map((a) => ({ step_id: step.id, person_id: a.person_id || null, person_name: a.person_name, signed_off: !!a.signed_off, signed_at: a.signed_at || null })));
@@ -2739,6 +2893,7 @@
   }
   function armDemo() {
     state.demoJobs = window.BLPresent.buildDemoJobs();
+    state.demoJobs.forEach((job) => { job.created_by = state.user?.name || job.created_by; });
     state.jobs = state.demoJobs;
     state.demoTurnaround = {
       id: 'demo-ta',
@@ -3509,7 +3664,39 @@
     $('#search').oninput = (e) => setFilter('q', e.target.value);
     $('#filter-status').onchange = (e) => setFilter('status', e.target.value);
     $('#filter-priority').onchange = (e) => setFilter('priority', e.target.value);
-    if ($('#filter-when')) $('#filter-when').onchange = (e) => setFilter('when', e.target.value);
+    document.addEventListener('click', (e) => {
+      const spanBtn = e.target.closest('[data-span]');
+      if (spanBtn) {
+        state.filters.span = spanBtn.dataset.span === 'all' ? '' : spanBtn.dataset.span;
+        if (!state.filters.anchor) state.filters.anchor = siteTodayKey();
+        rememberFilters();
+        renderJobList();
+        if (state.view === 'history') renderHistory();
+        return;
+      }
+      const stepBtn = e.target.closest('[data-date-step]');
+      if (stepBtn && !stepBtn.disabled) {
+        shiftAnchor(Number(stepBtn.dataset.dateStep));
+        rememberFilters();
+        renderJobList();
+        if (state.view === 'history') renderHistory();
+        return;
+      }
+      if (e.target.closest('[data-date-today]')) {
+        state.filters.anchor = siteTodayKey();
+        if (!state.filters.span) state.filters.span = 'day';
+        rememberFilters();
+        renderJobList();
+        if (state.view === 'history') renderHistory();
+      }
+    });
+    document.addEventListener('change', (e) => {
+      if (!e.target.matches('[data-job-sort]')) return;
+      state.filters.sort = e.target.value || '';
+      rememberFilters();
+      renderJobList();
+      if (state.view === 'history') renderHistory();
+    });
     $('#filter-unit').onchange = (e) => {
       state.filters.unit = e.target.value;
       if (state.filters.unit) {

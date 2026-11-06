@@ -219,6 +219,16 @@ label.lbl { display: block; font-size: 12px; font-weight: 700; color: var(--mute
 .wo { font-weight: 800; color: var(--amber); font-size: 14px; }
 .title { font-size: 18px; font-weight: 800; margin: 0 0 4px; color: var(--ink); line-height: 1.25; }
 .job-kicker { font-size: 13px; font-weight: 800; color: var(--amber-dim); }
+.date-nav { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; }
+.date-nav .btn.on { background: var(--brand); color: var(--on-brand); border-color: var(--brand); }
+.date-move { display: inline-flex; align-items: center; gap: 6px; }
+.date-window { font-weight: 800; min-height: 40px; display: inline-flex; align-items: center; }
+.date-sort { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; color: var(--muted); }
+.date-sort .select { width: auto; min-height: 44px; }
+.schedule-line { margin: 6px 0; font-weight: 800; }
+.schedule-line .k { display: inline-block; min-width: 6.5em; color: var(--muted); font-size: 11px; letter-spacing: .04em; text-transform: uppercase; }
+.schedule-line.none { color: var(--muted); }
+.schedule-detail { margin: 8px 0 12px; }
 .meta.quiet { margin-top: -4px; }
 .meta.quiet .chip { background: transparent; font-weight: 650; }
 .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }

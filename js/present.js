@@ -6,6 +6,13 @@
     d.setHours(hour || 8, 0, 0, 0);
     return d.toISOString();
   }
+  function planDay(n) {
+    const d = new Date();
+    d.setHours(12, 0, 0, 0);
+    d.setDate(d.getDate() + n);
+    const show = (d.getMonth() + 1) + '/' + d.getDate() + '/' + d.getFullYear() + ', 8:00 AM';
+    return { show, iso: d.toISOString() };
+  }
   function step(id, trade, label, status, extra) {
     const base = {
       id: id, job_id: id.split('-').slice(0, 2).join('-'), trade: trade, label: label, status: status,
@@ -31,11 +38,12 @@
         id: 'demo-hm u'.replace(' ', ''), wo_number: 'DEMO-2401', title: 'HMU exchanger heat-trace repair',
         unit: 'HMU', priority: 'Critical', status: 'in_progress', equipment_tag: 'E-2401',
         functional_location: 'CA.SUG-HMU-E2401', equipment_location: 'CA.SUG-HMU-E2401',
+        created_at: daysFromNow(-6, 9),
         job_date: daysFromNow(-2, 16).slice(0, 10),
-        beam: { dueDate: daysFromNow(-2, 16), planningWeek: week, orderType: '72FC', userStatus: 'EXEC', plantSection: 'PU1', location: 'HMU' },
+        beam: { source: 'beam', dueDate: daysFromNow(4, 16), planningWeek: week, orderType: '72FC', userStatus: 'EXEC', plantSection: 'PU1', location: 'HMU' },
         steps: [
-          step('demo-hmu-1', 'Insulator', 'Remove insulation', 'done', { sort: 1, who: 'Demo Insulator', holder: 'A. Khan', radio: '3' }),
-          step('demo-hmu-2', 'Electrician', 'Repair heat trace', 'ready', { sort: 2, who: 'Demo Electrician', holder: 'L. Berg', radio: '4', beam: { activityName: 'Repair heat trace', crew: 'EHT-1', remDuration: '6', earlyStart: 'Today 08:00', cranes: '' } }),
+          step('demo-hmu-1', 'Insulator', 'Remove insulation', 'done', { sort: 1, who: 'Demo Insulator', holder: 'A. Khan', radio: '3', beam: { earlyStart: planDay(-1).show, earlyStartIso: planDay(-1).iso, operation: '0010' } }),
+          step('demo-hmu-2', 'Electrician', 'Repair heat trace', 'ready', { sort: 2, who: 'Demo Electrician', holder: 'L. Berg', radio: '4', beam: { activityName: 'Repair heat trace', crew: 'EHT-1', remDuration: '6', earlyStart: planDay(3).show, earlyStartIso: planDay(3).iso, operation: '0020', cranes: '' } }),
         ],
       }),
       job({
@@ -85,8 +93,9 @@
         id: 'demo-wb', wo_number: 'DEMO-2406', title: 'Waterblock HVAC filter bank',
         unit: 'Waterblock', priority: 'Low', status: 'not_started', equipment_tag: 'AHU-2',
         functional_location: 'CA.SUG-WB-AHU2', equipment_location: 'CA.SUG-WB-AHU2',
-        job_date: daysFromNow(12, 16).slice(0, 10),
-        beam: { dueDate: daysFromNow(12, 16), planningWeek: week, orderType: 'MX04', userStatus: 'EXEC SFIX', plantSection: 'PU2' },
+        created_at: daysFromNow(0, 15),
+        job_date: '',
+        beam: { dueDate: '', planningWeek: week, orderType: 'MX04', userStatus: 'EXEC SFIX', plantSection: 'PU2' },
         steps: [
           step('demo-wb-1', 'HVAC', 'Change filter bank', 'pending', { sort: 1, who: 'Demo HVAC' }),
         ],

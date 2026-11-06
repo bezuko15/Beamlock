@@ -176,13 +176,9 @@
           <select id="filter-trade" class="select" aria-label="Trade">
             <option value="">All trades</option>
           </select>
-          <select id="filter-when" class="select" aria-label="When">
-            <option value="">Any date</option>
-            <option value="today">Today</option>
-            <option value="week">This week</option>
-          </select>
           <button class="btn btn-sm" id="btn-refresh">Refresh</button>
         </div>
+        <div id="date-nav"></div>
         <div class="pu-tabs" id="pu-tabs" aria-label="Filter by process unit"></div>
         <div class="unit-tabs" id="unit-tabs" aria-label="Filter by unit"></div>
         <div class="stats" id="mini-stats"></div>
@@ -196,6 +192,7 @@
 
       <section id="view-history" class="hidden">
         <p style="color:var(--muted);margin-top:0">Jobs where your name is on a sign-off, comment, permit, or the job itself.</p>
+        <div id="history-date-nav"></div>
         <div class="job-grid" id="history-list"></div>
       </section>
 
