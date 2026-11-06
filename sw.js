@@ -23,10 +23,15 @@ self.addEventListener('activate', (event) => {
   })());
 });
 
+function dropOldCaches() {
+  return caches.keys().then((keys) => Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))));
+}
+
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (url.hostname.includes('supabase.co')) return;
   if (event.request.method !== 'GET') return;
+  if (shellRequest(event.request)) event.waitUntil(dropOldCaches());
   if (shellRequest(event.request)) {
     event.respondWith((async () => {
       try {

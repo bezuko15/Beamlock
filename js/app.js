@@ -1851,6 +1851,7 @@
     };
     apply();
     requestAnimationFrame(apply);
+    setTimeout(apply, 0);
   }
   function showJobModal(job, opts) {
     if (!job) return;
