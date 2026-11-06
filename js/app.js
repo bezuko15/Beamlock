@@ -3301,6 +3301,8 @@
     renderDataSource();
     if (state.weather) paintWeather(state.weather);
   }
+  let prefsWriting = false;
+  let prefsAgain = false;
   async function persistPrefs() {
     state.prefs = sanitizePrefs(state.prefs);
     rememberLocalPrefs(state.prefs, Date.now());
@@ -3308,18 +3310,34 @@
     paintPrefPreview();
     if (!state.profile?.id) return;
     if (!navigator.onLine) { state.prefsDirty = true; return; }
-    const { error } = await sb.from('user_preferences').upsert({ user_id: state.profile.id, prefs: state.prefs });
-    state.prefsDirty = !!error;
-    if (error) toast('Saved on this device. It will sync when the connection returns.');
+    if (prefsWriting) { prefsAgain = true; return; }
+    prefsWriting = true;
+    try {
+      do {
+        prefsAgain = false;
+        const snapshot = state.prefs;
+        const { error } = await sb.from('user_preferences').upsert({ user_id: state.profile.id, prefs: snapshot });
+        state.prefsDirty = !!error;
+        if (error) toast('Saved on this device. It will sync when the connection returns.');
+      } while (prefsAgain && state.prefs);
+    } finally {
+      prefsWriting = false;
+      if (prefsAgain) {
+        prefsAgain = false;
+        await persistPrefs();
+      }
+    }
   }
   async function loadPrefs() {
     const local = readLocalPrefs();
     state.prefs = local;
     applyAppearance(local);
     if (!state.profile?.id || !navigator.onLine) return;
+    const started = Number(localStorage.getItem(prefsKey() + '_at') || 0);
     const { data, error } = await sb.from('user_preferences').select('prefs, updated_at').eq('user_id', state.profile.id).maybeSingle();
     if (error) return;
     const localAt = Number(localStorage.getItem(prefsKey() + '_at') || 0);
+    if (localAt !== started) return;
     const remoteAt = data?.updated_at ? new Date(data.updated_at).getTime() : 0;
     if (data && remoteAt >= localAt) {
       state.prefs = sanitizePrefs(data.prefs);
