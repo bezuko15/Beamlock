@@ -29,7 +29,7 @@ Sign-offs, holds, comments, reactions, imports, and role changes write an audit 
 
 ## Unit safety
 
-Each unit card can hold muster points, unit phones, the Firehall number, showers and eyewash, notes, and a map photo. Signed-in people can read it. Only an admin can change it. Empty fields stay blank until an admin sets them. Site emergency procedures and the official muster system take precedence over the card.
+Each unit card can hold muster points, unit phones, the Firehall number, a Fireball number, a Security number, a Panel number, showers and eyewash, notes, and a map photo. Signed-in people can read it. Only an admin can change it. Empty fields stay blank until an admin sets them. Site emergency procedures and the official muster system take precedence over the card.
 
 ## Photos
 

@@ -1,5 +1,5 @@
-const CACHE = 'beamlock-v16';
-const ASSETS = ['./', './index.html', './css/app.css', './js/app.js', './js/present.js', './js/config.js', './manifest.json', './icons/icon-192.png', './icons/icon-512.png', './vendor/supabase.js', './vendor/xlsx.full.min.js'];
+const CACHE = 'beamlock-v17';
+const ASSETS = ['./', './index.html', './css/app.css', './js/app.js', './js/present.js', './js/config.js', './manifest.json', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-192.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png', './vendor/supabase.js', './vendor/xlsx.full.min.js'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener('fetch', (e) => {

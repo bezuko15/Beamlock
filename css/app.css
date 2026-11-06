@@ -321,6 +321,24 @@ html.hc .btn-safety { background: #ffcc00; color: #000; border: 2px solid #000; 
 .voice-hold { touch-action: none; user-select: none; }
 .voice-hold.recording { background: #b42318; color: #fff; border-color: #b42318; }
 .voice-hint { font-size: 12px; color: var(--muted); margin: 4px 0; }
+.emerg-row { display: grid; gap: 8px; }
+@media (min-width: 800px) { .emerg-row { grid-template-columns: repeat(3, 1fr); } }
+.emerg { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-height: 84px; padding: 12px 14px; border-radius: 14px; background: #1a2332; color: #fff; border: 2px solid #1a2332; text-decoration: none; }
+.emerg .k { font-size: 12px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: #d7e0ea; }
+.emerg .v { font-size: 26px; font-weight: 800; line-height: 1.15; }
+.emerg .placeholder { color: #d7e0ea; font-size: 16px; font-style: italic; font-weight: 650; }
+.emerg.fireball { background: #b42318; border-color: #7f1d1d; }
+.emerg.fireball .k, .emerg.fireball .placeholder { color: #ffe4e1; }
+html.hc .emerg { background: #000; color: #fff; border-color: #fff; }
+html.hc .emerg.fireball { color: #ffcc00; border: 3px solid #ffcc00; }
+html.hc .emerg.fireball .k, html.hc .emerg.fireball .placeholder { color: #ffcc00; }
+.install-banner { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: #1a2332; color: #fff; border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; font-weight: 700; }
+.install-banner .btn { background: #fff; color: #1a2332; }
+.ios-steps { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+.ios-steps li { display: grid; grid-template-columns: 64px 1fr; gap: 12px; align-items: center; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 10px; }
+.ios-ico { width: 64px; height: 64px; border-radius: 16px; background: #eef3f8; display: grid; place-items: center; }
+.ios-steps strong { display: block; }
+.ios-steps p { margin: 2px 0 0; color: var(--muted); }
 .safety-card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 16px; display: grid; gap: 12px; }
 .safety-card h3 { margin: 0; }
 .safety-precedence { background: #fff7ed; border: 1px solid var(--amber); border-radius: 12px; padding: 10px 12px; font-weight: 700; }

@@ -6,13 +6,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#324259" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Beamlock" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="description" content="Beamlock — Trade sign-off. Real time." />
   <!-- Static-host CSP / COOP (GitHub Pages / Surge cannot set all response headers) -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://*.supabase.co; script-src 'self' 'unsafe-inline' https://*.supabase.co https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://*.supabase.co; img-src 'self' data: blob: https:; media-src 'self' blob: https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.open-meteo.com https://api.weather.gc.ca; frame-src 'self' https://app.powerbi.com https://*.powerbi.com https://login.microsoftonline.com; child-src 'self' https://app.powerbi.com https://*.powerbi.com https://login.microsoftonline.com; font-src 'self' data:; object-src 'none'; base-uri 'self' https://*.supabase.co; manifest-src 'self' https://*.supabase.co" />
   <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin-allow-popups" />
   <link rel="manifest" href="./manifest.json" />
   <link rel="icon" href="./icons/favicon.png" />
-  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
   <title>Beamlock</title>
   <link rel="stylesheet" href="./css/app.css" />
 </head>
@@ -36,6 +38,7 @@
         <select id="login-role" class="select"></select>
         <p id="login-error" class="hold-banner hidden"></p>
         <button class="btn btn-primary btn-block" style="margin-top:16px" id="login-btn" type="button">Sign in</button>
+        <button class="btn btn-block" style="margin-top:8px" id="btn-install" type="button">Add to Home Screen</button>
       </div>
     </div>
   </div>
@@ -78,6 +81,11 @@
         <button type="button" class="btn btn-sm" id="demo-play">Auto-play</button>
         <button type="button" class="btn btn-sm" id="demo-reset">Reset demo</button>
         <button type="button" class="btn btn-sm" id="demo-exit">Exit demo</button>
+      </div>
+      <div id="install-banner" class="install-banner hidden" role="region" aria-label="Add to Home Screen">
+        <span>Add Beamlock to your Home Screen so it opens full screen.</span>
+        <button type="button" class="btn btn-sm" id="install-banner-go">Add</button>
+        <button type="button" class="btn btn-sm" id="install-banner-dismiss" aria-label="Dismiss">Not now</button>
       </div>
       <div id="readonly-banner" class="hold-banner hidden">Read only until your role is approved.</div>
       <div class="safety-banner" id="safety-banner">
@@ -271,7 +279,7 @@
       <section id="view-security" class="hidden security-page">
         <h2>Security and privacy</h2>
         <p>Beamlock tracks work progress. It does not issue permits, approve permits, or authorize isolations or LOTO.</p>
-        <p>Unit safety cards list muster points, phones, the Firehall number, and showers. They start empty. Only an admin can fill them in. Site emergency procedures and the official muster system take precedence.</p>
+        <p>Unit safety cards list muster points, phones, the Firehall number, the Fireball number, the Security number, the Panel number, and showers. They start empty. Only an admin can fill them in. Site emergency procedures and the official muster system take precedence.</p>
         <h3>Where the data is</h3>
         <p>Jobs, accounts, and photos are in a Supabase project in Canada (<code>ca-central-1</code>). The site itself is static files. The browser uses only the public anon key. The service-role key is not in this site.</p>
         <h3>Who can change what</h3>

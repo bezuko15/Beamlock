@@ -2662,8 +2662,11 @@
       '<p><strong>' + esc(state.user?.name || '') + '</strong><br>' + esc(state.user?.realRole || '') + (state.profile?.status === 'pending' ? ' · waiting for approval' : '') + '</p>' +
       '<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="prof-notify"' + (on ? ' checked' : '') + ' /> Notify me on this device</label>' +
       '<p style="color:var(--muted)">Alerts fire while Beamlock is open: your trade when a step becomes next, and supervisors when a job is blocked or overdue. Background web push is not enabled. On iPhone, allow notifications for the Home Screen app; they show while the app is open.</p>' +
+      '<button type="button" class="btn btn-block" id="btn-install-profile" data-install style="margin-top:8px">Add to Home Screen</button>' +
       '<p id="sync-line"></p></div></div></div>';
     $('#prof-close').onclick = () => { root.innerHTML = ''; };
+    $('#btn-install-profile') && ($('#btn-install-profile').onclick = () => startInstall());
+    paintInstall();
     $('#prof-notify').onchange = async (e) => {
       if (e.target.checked) {
         if (!('Notification' in window)) { e.target.checked = false; return toast('This browser has no notifications'); }
@@ -2809,7 +2812,19 @@
     const phones = Array.isArray(row?.phones) ? row.phones : [];
     const showers = Array.isArray(row?.showers) ? row.showers : [];
     const blank = '<span class="placeholder">Not set yet, admin can add</span>';
+    const emerg = (label, value, cls) => {
+      const set = String(value || '').trim();
+      const body = '<span class="k">' + esc(label) + '</span><span class="v' + (set ? '' : ' placeholder') + '">' + (set ? esc(set) : 'Not set yet, admin can add') + '</span>';
+      return set
+        ? '<a class="emerg ' + cls + '" href="tel:' + esc(set.replace(/[^\d+]/g, '')) + '">' + body + '</a>'
+        : '<div class="emerg ' + cls + '">' + body + '</div>';
+    };
     host.innerHTML = '<article class="safety-card"><h3>' + esc(unit) + '</h3>' +
+      '<div class="emerg-row">' +
+      emerg('Fireball number', row?.fireball_number, 'fireball') +
+      emerg('Security number', row?.security_number, '') +
+      emerg('Panel number', row?.panel_number, '') +
+      '</div>' +
       '<div><strong>Unit muster point</strong><div>' + (row?.muster_unit ? esc(row.muster_unit) : blank) + '</div></div>' +
       '<div><strong>Site muster point</strong><div>' + (row?.muster_site ? esc(row.muster_site) : blank) + '</div></div>' +
       '<div><strong>Unit phones</strong>' + (phones.length ? phones.map((p) => '<div><a href="tel:' + esc(String(p.number || '').replace(/[^\d+]/g, '')) + '">' + esc(p.name || 'Phone') + ' · ' + esc(p.number || '') + '</a></div>').join('') : '<div>' + blank + '</div>') + '</div>' +
@@ -2822,6 +2837,9 @@
         '<label class="lbl">Unit muster point</label><input class="input" name="muster_unit" value="' + esc(row?.muster_unit || '') + '" />' +
         '<label class="lbl">Site muster point</label><input class="input" name="muster_site" value="' + esc(row?.muster_site || '') + '" />' +
         '<label class="lbl">Phones, one per line: name | number</label><textarea class="textarea" name="phones">' + esc(phones.map((p) => (p.name || '') + ' | ' + (p.number || '')).join('\n')) + '</textarea>' +
+        '<label class="lbl">Fireball number</label><input class="input" name="fireball_number" value="' + esc(row?.fireball_number || '') + '" />' +
+        '<label class="lbl">Security number</label><input class="input" name="security_number" value="' + esc(row?.security_number || '') + '" />' +
+        '<label class="lbl">Panel number</label><input class="input" name="panel_number" value="' + esc(row?.panel_number || '') + '" />' +
         '<label class="lbl">Firehall number</label><input class="input" name="firehall_number" value="' + esc(row?.firehall_number || '') + '" />' +
         '<label class="lbl">Showers, one per line: ID | location</label><textarea class="textarea" name="showers">' + esc(showers.map((s) => (s.id || '') + ' | ' + (s.location || '')).join('\n')) + '</textarea>' +
         '<label class="lbl">Notes</label><textarea class="textarea" name="notes">' + esc(row?.notes || '') + '</textarea>' +
@@ -2843,7 +2861,7 @@
         if (up.error) return toast(up.error.message);
         mapPath = 'comment-photos/' + path;
       }
-      const payload = { unit, muster_unit: form.muster_unit.value.trim(), muster_site: form.muster_site.value.trim(), phones: phonesNext, showers: showersNext, firehall_number: form.firehall_number.value.trim(), notes: form.notes.value.trim(), map_path: mapPath, updated_at: new Date().toISOString(), updated_by: state.user.name };
+      const payload = { unit, muster_unit: form.muster_unit.value.trim(), muster_site: form.muster_site.value.trim(), phones: phonesNext, showers: showersNext, firehall_number: form.firehall_number.value.trim(), fireball_number: form.fireball_number.value.trim(), security_number: form.security_number.value.trim(), panel_number: form.panel_number.value.trim(), notes: form.notes.value.trim(), map_path: mapPath, updated_at: new Date().toISOString(), updated_by: state.user.name };
       const { error } = await sb.from('unit_safety').upsert(payload);
       if (error) return toast(error.message);
       await loadSafety();
@@ -2959,6 +2977,38 @@
     else XLSX.writeFile(wb, 'turnaround.xlsx');
   }
 
+  let deferredInstall = null;
+  function appIsInstalled() {
+    return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  }
+  function paintInstall() {
+    const hide = appIsInstalled();
+    document.querySelectorAll('#btn-install, [data-install]').forEach((el) => el.classList.toggle('hidden', hide));
+    const banner = $('#install-banner');
+    if (banner) banner.classList.toggle('hidden', hide || localStorage.getItem('bl_install_dismiss') === '1');
+  }
+  function openInstallGuide() {
+    const root = $('#modal-root');
+    if (!root) return;
+    const share = '<svg width="36" height="36" viewBox="0 0 36 36" aria-hidden="true"><rect x="8" y="12" width="20" height="16" rx="3" fill="none" stroke="#1a2332" stroke-width="2"/><path d="M18 6v14M13 11l5-5 5 5" fill="none" stroke="#1a2332" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    const plus = '<svg width="36" height="36" viewBox="0 0 36 36" aria-hidden="true"><rect x="6" y="6" width="24" height="24" rx="6" fill="none" stroke="#1a2332" stroke-width="2"/><path d="M18 12v12M12 18h12" stroke="#1a2332" stroke-width="2" stroke-linecap="round"/></svg>';
+    const add = '<svg width="36" height="36" viewBox="0 0 36 36" aria-hidden="true"><rect x="6" y="10" width="24" height="18" rx="4" fill="#324259"/><text x="18" y="23" text-anchor="middle" fill="#fff" font-size="11" font-family="sans-serif" font-weight="700">Add</text></svg>';
+    root.innerHTML = '<div class="overlay" id="ios-guide"><div class="modal" role="dialog" aria-label="Add Beamlock to the Home Screen"><div class="modal-head"><strong>Add to Home Screen</strong><button class="btn btn-sm" id="ios-close" type="button">Close</button></div><div class="modal-body"><p>On iPhone or iPad, Safari does not show an install prompt. Use these three steps.</p><ol class="ios-steps"><li><span class="ios-ico">' + share + '</span><div><strong>1. Share</strong><p>Tap the Share button at the bottom of Safari.</p></div></li><li><span class="ios-ico">' + plus + '</span><div><strong>2. Add to Home Screen</strong><p>Scroll the share sheet and tap Add to Home Screen.</p></div></li><li><span class="ios-ico">' + add + '</span><div><strong>3. Add</strong><p>Tap Add. Beamlock then opens full screen from the icon.</p></div></li></ol></div></div></div>';
+    $('#ios-close').onclick = () => { root.innerHTML = ''; };
+    $('#ios-guide').onclick = (e) => { if (e.target.id === 'ios-guide') root.innerHTML = ''; };
+  }
+  async function startInstall() {
+    if (appIsInstalled()) return;
+    const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (deferredInstall && !ios) {
+      deferredInstall.prompt();
+      try { await deferredInstall.userChoice; } catch (_) {}
+      deferredInstall = null;
+      paintInstall();
+      return;
+    }
+    openInstallGuide();
+  }
   function bind() {
     $('#main-tabs').onclick = (e) => { const t = e.target.closest('.tab'); if (t) setView(t.dataset.view); };
     const setFilter = (key, value) => { state.filters[key] = value; rememberFilters(); renderJobList(); };
@@ -3013,6 +3063,12 @@
     $('#demo-reset') && ($('#demo-reset').onclick = resetDemo);
     $('#demo-play') && ($('#demo-play').onclick = toggleDemoPlay);
     $('#btn-profile') && ($('#btn-profile').onclick = openProfile);
+    window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; paintInstall(); });
+    window.addEventListener('appinstalled', () => { deferredInstall = null; localStorage.setItem('bl_install_dismiss', '1'); paintInstall(); });
+    $('#btn-install') && ($('#btn-install').onclick = () => startInstall());
+    $('#install-banner-go') && ($('#install-banner-go').onclick = () => startInstall());
+    $('#install-banner-dismiss') && ($('#install-banner-dismiss').onclick = () => { localStorage.setItem('bl_install_dismiss', '1'); paintInstall(); });
+    paintInstall();
     $('#btn-handover') && ($('#btn-handover').onclick = openHandover);
     $('#wx-chip') && ($('#wx-chip').onclick = () => openWeatherSheet());
     $('#btn-turn-export') && ($('#btn-turn-export').onclick = () => exportTurnaround('xlsx'));
