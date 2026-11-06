@@ -2802,18 +2802,101 @@
       if (canSeeDash() && dueBucket(job) === 'overdue' && (!old || dueBucket(old) !== 'overdue')) notify('Job overdue', job.wo_number + ' — ' + job.title);
     }
   }
+  async function changeOwnCode(current, next, again) {
+    if (state.demoOn) return 'Demo mode does not change sign-in codes.';
+    if (!navigator.onLine) return 'You need a connection to change your sign-in code.';
+    const currentCode = String(current || '');
+    const newCode = String(next || '');
+    const confirmCode = String(again || '');
+    if (!currentCode) return 'Enter your current sign-in code.';
+    if (!/^\d{6,}$/.test(newCode)) return 'The new code must be 6 or more digits.';
+    if (newCode !== confirmCode) return 'The new codes do not match.';
+    if (newCode === currentCode) return 'Choose a different sign-in code.';
+    const { data: sessionData } = await sb.auth.getSession();
+    const session = sessionData?.session;
+    const email = session?.user?.email || '';
+    if (!session || !email || session.user.id !== state.profile?.id) return 'Sign in again before changing your code.';
+    const offline = () => 'Could not reach the account service. Your sign-in code was not changed.';
+    state.changingCode = true;
+    try {
+      let guard;
+      try {
+        guard = await sb.rpc('login_guard', { person: state.profile.display_name || state.user.name, code: currentCode });
+      } catch (_) {
+        return offline();
+      }
+      if (guard.error) return /fetch|network|failed/i.test(String(guard.error.message || '')) ? offline() : 'Could not check the current sign-in code. It was not changed.';
+      if (guard.data === 'locked') return 'Too many wrong codes. Try again in 15 minutes.';
+      if (guard.data === 'deactivated') return 'This account is deactivated.';
+      if (guard.data === 'rejected') return 'This account was not approved.';
+      if (guard.data !== 'ok') return 'Current sign-in code is wrong.';
+      const checked = await sb.auth.signInWithPassword({ email, password: currentCode });
+      if (checked.error) {
+        if (/fetch|network|failed/i.test(String(checked.error.message || ''))) return offline();
+        return 'Current sign-in code is wrong.';
+      }
+      const updated = await sb.auth.updateUser({ password: newCode });
+      if (updated.error) {
+        if (/fetch|network|failed/i.test(String(updated.error.message || ''))) return offline();
+        return 'The sign-in code was not changed.';
+      }
+      const signed = await sb.auth.signInWithPassword({ email, password: newCode });
+      if (signed.error) {
+        const { data: still } = await sb.auth.getSession();
+        if (!still?.session) return 'SIGN_IN';
+      }
+      try { await audit(null, 'code_changed', 'Sign-in code changed'); } catch (_) {}
+      return '';
+    } finally {
+      setTimeout(() => { state.changingCode = false; }, 1500);
+    }
+  }
   function openProfile() {
     const on = localStorage.getItem('bl_notify_' + (state.profile?.id || '')) === '1';
     const root = $('#modal-root');
-    root.innerHTML = '<div class="overlay"><div class="modal" role="dialog"><div class="modal-head"><strong>Profile</strong><button class="btn btn-sm" id="prof-close" type="button">Close</button></div><div class="modal-body">' +
+    root.innerHTML = '<div class="overlay"><div class="modal" role="dialog" aria-label="Settings"><div class="modal-head"><strong>Settings</strong><button class="btn btn-sm" id="prof-close" type="button">Close</button></div><div class="modal-body">' +
       '<p><strong>' + esc(state.user?.name || '') + '</strong><br>' + esc(state.user?.realRole || '') + (state.profile?.status === 'pending' ? ' · waiting for approval' : '') + '</p>' +
       '<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="prof-notify"' + (on ? ' checked' : '') + ' /> Notify me on this device</label>' +
       '<p style="color:var(--muted)">Alerts fire while Beamlock is open: your trade when a step becomes next, and supervisors when a job is blocked or overdue. Background web push is not enabled. On iPhone, allow notifications for the Home Screen app; they show while the app is open.</p>' +
       '<button type="button" class="btn btn-block" id="btn-install-profile" data-install style="margin-top:8px">Add to Home Screen</button>' +
+      '<h3>Change sign-in code</h3>' +
+      '<p style="color:var(--muted)">This changes the code for your own account. Your role stays the same. A connection is required. The code is not saved on this device.</p>' +
+      '<form id="code-form" method="post" action="#" autocomplete="off">' +
+      '<label class="lbl" for="code-current">Current sign-in code</label>' +
+      '<input id="code-current" class="input" type="password" inputmode="numeric" autocomplete="current-password" autocapitalize="off" spellcheck="false" />' +
+      '<label class="lbl" for="code-new">New sign-in code</label>' +
+      '<input id="code-new" class="input" type="password" inputmode="numeric" autocomplete="new-password" autocapitalize="off" spellcheck="false" />' +
+      '<label class="lbl" for="code-confirm">Confirm new sign-in code</label>' +
+      '<input id="code-confirm" class="input" type="password" inputmode="numeric" autocomplete="new-password" autocapitalize="off" spellcheck="false" />' +
+      '<p id="code-error" class="hold-banner hidden"></p>' +
+      '<button type="submit" class="btn btn-primary btn-block" id="code-save" style="margin-top:12px">Change sign-in code</button>' +
+      '</form>' +
       '<p id="sync-line"></p></div></div></div>';
     $('#prof-close').onclick = () => { root.innerHTML = ''; };
     $('#btn-install-profile') && ($('#btn-install-profile').onclick = () => startInstall());
     paintInstall();
+    $('#code-form').onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = $('#code-save');
+      const showErr = (message) => {
+        const el = $('#code-error');
+        if (!el) return;
+        el.textContent = message;
+        el.classList.toggle('hidden', !message);
+        if (message) toast(message);
+      };
+      showErr('');
+      if (btn) btn.disabled = true;
+      const message = await changeOwnCode($('#code-current').value, $('#code-new').value, $('#code-confirm').value);
+      if (btn) btn.disabled = false;
+      if (message === 'SIGN_IN') {
+        showLogin('Sign in with your new code.');
+        return;
+      }
+      if (message) { showErr(message); return; }
+      ['#code-current', '#code-new', '#code-confirm'].forEach((id) => { const el = $(id); if (el) el.value = ''; });
+      toast('Sign-in code changed. This device stays signed in.');
+    };
     $('#prof-notify').onchange = async (e) => {
       if (e.target.checked) {
         if (!('Notification' in window)) { e.target.checked = false; return toast('This browser has no notifications'); }
@@ -3357,7 +3440,7 @@
   bindAuth();
   paintRememberedLogin();
   sb.auth.onAuthStateChange(async (event) => {
-    if (event !== 'SIGNED_OUT' || state.explicitSignOut) return;
+    if (event !== 'SIGNED_OUT' || state.explicitSignOut || state.changingCode) return;
     const { data } = await sb.auth.getSession();
     if (!data?.session && state.user) showLogin('');
   });

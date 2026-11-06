@@ -20,12 +20,13 @@ Access is enforced in the database with row-level security, not only by hiding b
 - An approved planner manages jobs and the maintenance-schedule import. An approved admin manages users and settings.
 - An operator may view the app as another role except Admin. The audit log records that as "Operator Name acting as Role".
 - Five wrong codes lock that account for 15 minutes. A deactivated account is signed out.
+- A signed-in person can change their own sign-in code from Settings. The current code is checked on the server, the same lockout applies, and the new code is saved only through Supabase Auth for that same account. The code is not written into the audit log, preferences, or the device cache. The role does not change, and that device stays signed in.
 
 People cannot change their own role. Role and approval live in a profiles table the user cannot update.
 
 ## Audit
 
-Sign-offs, holds, comments, reactions, imports, and role changes write an audit row. The database stamps the actor name and role from the signed-in account. The browser does not get to invent that name. A person can add or remove only their own reaction. A reaction means they understand the item is there. It does not approve the work.
+Sign-offs, holds, comments, reactions, imports, role changes, and sign-in code changes write an audit row. A code change records that it happened, not the code. The database stamps the actor name and role from the signed-in account. The browser does not get to invent that name. A person can add or remove only their own reaction. A reaction means they understand the item is there. It does not approve the work.
 
 ## Unit safety
 
