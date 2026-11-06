@@ -289,13 +289,19 @@
   }
   function gotItHtml(type, id, jobId) {
     const rows = reactionsFor(type, id);
-    return '<span class="react-bar">' + REACTIONS.map((kind) => {
+    const pills = REACTIONS.map((kind) => {
+      const people = rows.filter((row) => (row.kind || 'gotit') === kind.id);
+      if (!people.length) return '';
+      const names = people.map((row) => row.actor_name).filter(Boolean);
+      const mine = people.some(isMyReaction);
+      const who = names.join(', ') || 'Someone';
+      return '<button type="button" class="react-pill' + (mine ? ' on' : '') + '" aria-label="' + esc(kind.label) + ', ' + names.length + ', ' + esc(who) + '">' + kind.emoji + '<span>' + names.length + '</span><span class="react-who">' + esc(kind.label) + ': ' + esc(who) + '</span></button>';
+    }).join('');
+    const menu = REACTIONS.map((kind) => {
       const mine = rows.some((row) => (row.kind || 'gotit') === kind.id && isMyReaction(row));
-      const names = rows.filter((row) => (row.kind || 'gotit') === kind.id).map((row) => row.actor_name).filter(Boolean);
-      const who = names.length ? names.join(', ') : 'No one yet';
-      const count = names.length ? '<button type="button" class="react-n" aria-label="' + esc(kind.label) + ': ' + esc(who) + '">' + names.length + '<span class="react-who">' + esc(kind.label) + ': ' + esc(who) + '</span></button>' : '';
-      return '<span class="react-pick"><button type="button" class="react kind-' + kind.id + (mine ? ' on' : '') + '" data-react="' + esc(type) + '" data-id="' + esc(id) + '" data-job="' + esc(jobId) + '" data-kind="' + kind.id + '" aria-pressed="' + (mine ? 'true' : 'false') + '" aria-label="' + esc(kind.label) + '" title="' + esc(kind.label) + '">' + kind.emoji + '</button>' + count + '</span>';
-    }).join('') + '</span>';
+      return '<button type="button" class="react-choice' + (mine ? ' on' : '') + '" data-react="' + esc(type) + '" data-id="' + esc(id) + '" data-job="' + esc(jobId) + '" data-kind="' + kind.id + '">' + kind.emoji + ' ' + esc(kind.label) + '</button>';
+    }).join('');
+    return '<span class="react-bar">' + pills + '<span class="react-add-wrap"><button type="button" class="react-add" aria-label="Add a reaction">+</button><span class="react-menu">' + menu + '</span></span></span>';
   }
   function paintOpenJob() {
     const openId = document.querySelector('#job-overlay')?.dataset.jobId;
@@ -587,6 +593,8 @@
     if (state.demoOn) { renderAll(); return; }
     const prev = (state.jobs || []).map((j) => ({ id: j.id, on_hold: j.on_hold, beam: j.beam, steps: j.steps }));
     try {
+      await loadMeta();
+      renderDataSource();
       await loadFullJobs();
       scanAlerts(prev, state.jobs);
       renderAll();
@@ -910,8 +918,6 @@
       (quiet.length ? '<div class="meta quiet">' + quiet.map((t) => '<span class="chip">' + esc(t) + '</span>').join('') + '</div>' : '') +
       '<div class="steps-mini">' + steps + '</div>' +
       (job.on_hold ? '<div style="margin-top:8px;color:var(--red);font-size:13px;font-weight:700">' + esc(job.hold_reason || '') + '</div>' : '') +
-      (job.status === 'done' ? gotItHtml('job', job.id, job.id) : '') +
-      '<button type="button" class="btn btn-safety btn-block" data-card-safety="' + esc(job.unit || '') + '">Safety' + (job.unit ? ' · ' + esc(job.unit) : '') + '</button>' +
       '</article>';
   }
 
@@ -1053,13 +1059,72 @@
       '<span class="pill">Auth: demo</span>' +
       '<span class="pill">Region: ' + esc(cfg.region) + '</span>';
   }
+  function readAppDraft() {
+    const rows = $$('#app-edit-rows .app-edit-row');
+    if (!rows.length) return;
+    rows.forEach((row, i) => {
+      const tile = state.tiles[i];
+      if (!tile) return;
+      tile.name = (row.querySelector('[data-k=name]')?.value || '').trim() || 'App';
+      tile.url = (row.querySelector('[data-k=url]')?.value || '').trim();
+      if (!tile.icon || tile.icon === '·') tile.icon = tile.name.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() || 'APP';
+    });
+  }
+  async function saveAppTiles() {
+    readAppDraft();
+    const kept = [];
+    for (let i = 0; i < state.tiles.length; i++) {
+      const tile = state.tiles[i];
+      const id = String(tile.id || ('app-' + Date.now() + '-' + i));
+      tile.id = id;
+      kept.push(id);
+      const { error } = await sb.from('app_tiles').upsert({
+        id, icon: tile.icon || 'APP', name: tile.name, url: tile.url || '', description: tile.description || '', sort_order: i + 1,
+      });
+      if (error) return toast(error.message);
+    }
+    const { data: existing, error: listError } = await sb.from('app_tiles').select('id');
+    if (listError) return toast(listError.message);
+    const drop = (existing || []).map((row) => row.id).filter((id) => !kept.includes(id));
+    if (drop.length) {
+      const { error } = await sb.from('app_tiles').delete().in('id', drop);
+      if (error) return toast(error.message);
+    }
+    await loadMeta();
+    renderApps();
+    if (state.view === 'admin') renderAdmin();
+    toast('Apps saved');
+  }
   function renderApps() {
-    $('#app-tiles').innerHTML = state.tiles.map((t) => {
+    const host = $('#app-tiles');
+    if (!host) return;
+    host.innerHTML = (state.tiles || []).map((t) => {
       const url = externalUrl(t.url);
       const body = '<div class="ico">' + esc(t.icon || '·') + '</div><div class="name">' + esc(t.name) + '</div><div class="desc">' + esc(t.description || '') + '</div>';
       if (url) return '<a class="app-tile" href="' + esc(url) + '" target="_blank" rel="noopener noreferrer">' + body + '</a>';
-      return '<div class="app-tile disabled" aria-disabled="true">' + body + '<div class="not-configured">Not configured yet</div></div>';
-    }).join('') || '<div class="empty">No tiles.</div>';
+      return '<div class="app-tile disabled" aria-disabled="true">' + body + '<div class="not-configured">Link not set, admin can add</div></div>';
+    }).join('') || '<div class="empty">No apps yet.</div>';
+    const editor = $('#app-editor');
+    if (!editor) return;
+    if (!isRealAdmin()) { editor.classList.add('hidden'); editor.innerHTML = ''; return; }
+    editor.classList.remove('hidden');
+    editor.innerHTML = '<div class="app-edit"><h3 style="margin:0">Edit app links</h3>' +
+      '<div id="app-edit-rows">' + (state.tiles || []).map((t, i) =>
+        '<div class="app-edit-row" data-i="' + i + '"><input class="input" data-k="name" aria-label="Label" value="' + esc(t.name || '') + '" /><input class="input" data-k="url" aria-label="URL" placeholder="https://…" value="' + esc(t.url || '') + '" /><button type="button" class="btn btn-sm" data-app-remove="' + i + '">Remove</button></div>'
+      ).join('') + '</div><div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn" id="app-add">Add app</button><button type="button" class="btn btn-primary" id="app-save">Save apps</button></div></div>';
+    $('#app-add').onclick = () => {
+      readAppDraft();
+      state.tiles.push({ id: 'app-' + Date.now(), icon: '·', name: 'New app', url: '', description: '', sort_order: state.tiles.length + 1 });
+      renderApps();
+    };
+    $('#app-save').onclick = () => saveAppTiles();
+    editor.querySelectorAll('[data-app-remove]').forEach((btn) => {
+      btn.onclick = () => {
+        readAppDraft();
+        state.tiles.splice(+btn.dataset.appRemove, 1);
+        renderApps();
+      };
+    });
   }
   function renderDashboards() {
     const pbi = state.settings?.power_bi_embed || {};
@@ -1438,7 +1503,7 @@
       '<div class="meta" style="margin-top:8px"><span class="chip">' + esc(job.unit) + ' · ' + esc(job.area || '') + '</span>' +
       (place.pu ? '<span class="chip pu">' + esc((place.site ? place.site + ' · ' : '') + place.pu) + '</span>' : '') +
       '<span class="chip">' + esc(job.equipment_tag) + '</span><span class="chip">' + esc(job.priority) + '</span></div></div>' +
-      '<button class="btn btn-sm" id="close-modal">Close</button></div><div class="modal-body">' +
+      '<div class="modal-head-actions"><button type="button" class="safety-link" data-open-safety="' + esc(job.unit || '') + '" aria-label="Safety for ' + esc(job.unit || 'this unit') + '"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 2.2 20 5.2v6.2c0 4.7-3.2 8-8 9.6-4.8-1.6-8-4.9-8-9.6V5.2L12 2.2z"/></svg> Safety</button><button class="btn btn-sm" id="close-modal">Close</button></div></div><div class="modal-body">' +
       (job.equipment_location ? '<div class="equip-loc"><span class="k">Equipment location</span><span class="v">' + esc(job.equipment_location) + '</span></div>' : '') +
       (job.on_hold ? '<div class="hold-banner">ON HOLD — ' + esc(job.hold_reason || '') + ' (' + esc(job.hold_by || '') + ')</div>' : '') +
       '<p style="color:var(--muted);margin-top:0">' + esc(job.description || '') + '</p>' +
@@ -1450,7 +1515,6 @@
       '<span class="chip">P&ID: ' + esc(job.pid_number || '—') + '</span>' +
       (wait ? '<span class="chip hot">Next: ' + esc(wait.label) + '</span>' : '') + '</div>' +
       '<div class="launch-row">' + launchHtml + '</div>' +
-      '<button type="button" class="btn btn-safety btn-block" data-open-safety="' + esc(job.unit || '') + '">Safety' + (job.unit ? ' · ' + esc(job.unit) : '') + '</button>' +
       '<div class="utl-row"><span class="utl-label">Copy to UTL log</span>' +
       '<button type="button" class="btn btn-sm btn-primary" data-utl="today">Today\'s notes only</button>' +
       '<button type="button" class="btn btn-sm" data-utl="all">All notes</button>' + utlOpen + '</div>' +
@@ -3181,9 +3245,23 @@
       } catch (e) { toast(e.message); }
     };
     document.addEventListener('click', (e) => {
-      const count = e.target.closest('.react-n');
-      if (count) { count.classList.toggle('open'); return; }
-      const react = e.target.closest('[data-kind]');
+      const add = e.target.closest('.react-add');
+      if (add) {
+        const wrap = add.parentElement;
+        const open = wrap.classList.contains('open');
+        document.querySelectorAll('.react-add-wrap.open, .react-pill.open').forEach((el) => el.classList.remove('open'));
+        if (!open) wrap.classList.add('open');
+        return;
+      }
+      const pill = e.target.closest('.react-pill');
+      if (pill) {
+        const open = pill.classList.contains('open');
+        document.querySelectorAll('.react-add-wrap.open, .react-pill.open').forEach((el) => el.classList.remove('open'));
+        if (!open) pill.classList.add('open');
+        return;
+      }
+      document.querySelectorAll('.react-add-wrap.open, .react-pill.open').forEach((el) => el.classList.remove('open'));
+      const react = e.target.closest('.react-choice');
       if (react) { toggleReaction(react.dataset.react, react.dataset.id, react.dataset.job, react.dataset.kind); return; }
       const safety = e.target.closest('[data-card-safety]');
       if (safety) { state.safetyUnit = safety.dataset.cardSafety || ''; setView('safety'); return; }

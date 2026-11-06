@@ -94,14 +94,14 @@
       <div class="datasource-bar" id="datasource-bar">Data source: loading…</div>
       <div class="tabs" id="main-tabs">
         <button class="tab active" data-view="jobs">Jobs</button>
+        <button class="tab" data-view="apps">Apps</button>
         <button class="tab" data-view="mine">My trade <span class="badge" id="mine-count">0</span></button>
         <button class="tab" data-view="history">My jobs</button>
         <button class="tab" data-view="board">Live board</button>
         <button class="tab hidden" id="tab-dash" data-view="dash">Dashboard</button>
         <button class="tab hidden" id="tab-turn" data-view="turn">Turnaround</button>
-        <button class="tab" data-view="safety">Safety</button>
+        <button class="tab" data-view="safety"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2.2 20 5.2v6.2c0 4.7-3.2 8-8 9.6-4.8-1.6-8-4.9-8-9.6V5.2L12 2.2z"/></svg> Safety</button>
         <button class="tab" data-view="planner" id="tab-planner">Planner</button>
-        <button class="tab" data-view="apps">Apps</button>
         <button class="tab" data-view="dashboards">Dashboards</button>
         <button class="tab" data-view="audit">Audit</button>
         <button class="tab" data-view="admin" id="tab-admin">Admin</button>
@@ -171,8 +171,9 @@
       </section>
 
       <section id="view-apps" class="hidden">
-        <p style="color:var(--muted);margin-top:0">Plant systems &amp; links (placeholders until Shell IT provides URLs).</p>
+        <p style="color:var(--muted);margin-top:0">Plant systems. A tile stays empty until an admin adds its link.</p>
         <div class="app-tiles" id="app-tiles"></div>
+        <div id="app-editor" class="hidden"></div>
       </section>
 
       <section id="view-dashboards" class="hidden">
