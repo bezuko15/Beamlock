@@ -403,15 +403,17 @@
     const slug = String(name || '').trim().toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '');
     return (slug || 'user') + '@beamlock.local';
   }
-  function isRealAdmin() { return state.profile?.status === 'approved' && state.profile?.role === 'Admin'; }
-  function canManageUsers() { return state.profile?.status === 'approved' && ['Admin', 'Planner'].includes(state.user?.role); }
-  function canPlan() { return ['Admin', 'Planner'].includes(state.user?.role); }
-  function canSupervise() { return ['Admin', 'Planner', 'Supervisor'].includes(state.user?.role); }
+  function isApproved() { return state.profile?.status === 'approved'; }
+  function isRealAdmin() { return isApproved() && state.profile?.role === 'Admin'; }
+  function canManageUsers() { return isApproved() && ['Admin', 'Planner'].includes(state.user?.role); }
+  function canPlan() { return isApproved() && ['Admin', 'Planner'].includes(state.user?.role); }
+  function canSupervise() { return isApproved() && ['Admin', 'Planner', 'Supervisor'].includes(state.user?.role); }
   function canActOnStep(step) {
-    if (state.profile?.status !== 'approved') return false;
+    if (!isApproved()) return false;
     if (canSupervise()) return true;
     return !!state.user?.trade && state.user.trade === step.trade;
   }
+  function needsApproval(role) { return ['Planner', 'Supervisor', 'Admin'].includes(role); }
   function applyProfile(p) {
     state.profile = p;
     const staff = ['Admin', 'Planner', 'Supervisor', 'Operator'];
@@ -433,15 +435,9 @@
     const err = $('#login-error');
     if (err) { err.textContent = message || ''; err.classList.toggle('hidden', !message); }
   }
-  function showGate(profile) {
-    $('#login').classList.add('hidden');
-    $('#app').classList.add('hidden');
-    $('#gate').classList.remove('hidden');
-    const rejected = profile.status === 'rejected';
-    $('#gate-title').textContent = rejected ? 'Account not approved' : 'Waiting for approval';
-    $('#gate-copy').textContent = rejected
-      ? 'A planner or admin did not approve this account.'
-      : 'Your account is pending. A planner or admin has to approve your role before you can open jobs. Requested role: ' + (profile.requested_role || profile.role) + '.';
+  function readonlyCopy(profile) {
+    const who = profile.role === 'Admin' ? 'an admin' : 'a planner or admin';
+    return 'Read only until ' + who + ' approves your ' + (profile.role || 'role') + ' role. You can look at jobs. You cannot change them yet.';
   }
   async function signOut(message) {
     try { if (state.channels.main) sb.removeChannel(state.channels.main); } catch (_) {}
@@ -459,8 +455,11 @@
     const { data, error } = await sb.rpc('signup_roles');
     if (error) throw error;
     const roles = Array.isArray(data) ? data : [];
-    const sel = $('#create-role');
-    if (sel) sel.innerHTML = roles.map((r) => '<option value="' + esc(r.id) + '">' + esc(r.label) + '</option>').join('');
+    const sel = $('#login-role');
+    if (sel && !sel.dataset.filled) {
+      sel.innerHTML = roles.map((r) => '<option value="' + esc(r.id) + '">' + esc(r.label) + '</option>').join('');
+      sel.dataset.filled = '1';
+    }
     return roles;
   }
   function watchProfile(id) {
@@ -476,8 +475,8 @@
         const next = payload.new;
         if (!next) return;
         if (next.status === 'deactivated') { await signOut('This account is deactivated.'); return; }
+        if (next.status === 'rejected') { await signOut('This account was not approved.'); return; }
         applyProfile(next);
-        if (next.status !== 'approved') { showGate(next); return; }
         if ($('#app').classList.contains('hidden')) { await enterApp(); return; }
         paintIdentity();
         renderAll();
@@ -490,59 +489,56 @@
     const { data: profile, error } = await sb.from('profiles').select('*').eq('id', userData.user.id).single();
     if (error || !profile) { await signOut('This account has no profile.'); return; }
     if (profile.status === 'deactivated') { await signOut('This account is deactivated.'); return; }
+    if (profile.status === 'rejected') { await signOut('This account was not approved.'); return; }
     applyProfile(profile);
     watchProfile(profile.id);
-    if (profile.status !== 'approved') { showGate(profile); return; }
     await sb.rpc('touch_sign_in');
     await enterApp();
   }
   function bindAuth() {
-    const fail = (id, message) => { const el = $(id); if (!el) return; el.textContent = message; el.classList.remove('hidden'); };
-    $('#show-create').onclick = async () => {
-      $('#signin-panel').classList.add('hidden');
-      $('#create-panel').classList.remove('hidden');
-      try { await loadSignupRoles(); } catch (e) { fail('#create-error', e.message); }
-    };
-    $('#show-signin').onclick = () => {
-      $('#create-panel').classList.add('hidden');
-      $('#signin-panel').classList.remove('hidden');
-    };
-    $('#gate-signout').onclick = () => signOut('');
+    const fail = (message) => { const el = $('#login-error'); if (!el) return; el.textContent = message; el.classList.remove('hidden'); };
+    $('#gate-signout') && ($('#gate-signout').onclick = () => signOut(''));
     $('#login-btn').onclick = async () => {
       const name = $('#login-name').value.trim();
       const code = $('#login-code').value;
-      if (!name || !code) return fail('#login-error', 'Enter your name and code.');
+      const again = $('#login-code2').value;
+      const role = $('#login-role').value;
+      if (name.length < 2 || !code) return fail('Enter your name and code.');
       const guard = await sb.rpc('login_guard', { person: name, code });
-      if (guard.error) return fail('#login-error', guard.error.message);
-      if (guard.data === 'locked') return fail('#login-error', 'Too many wrong codes. Try again in 15 minutes.');
-      if (guard.data === 'deactivated') return fail('#login-error', 'This account is deactivated.');
-      if (guard.data !== 'ok') return fail('#login-error', 'Name or code is wrong.');
+      if (guard.error) return fail(guard.error.message);
+      if (guard.data === 'locked') return fail('Too many wrong codes. Try again in 15 minutes.');
+      if (guard.data === 'deactivated') return fail('This account is deactivated.');
+      if (guard.data === 'rejected') return fail('This account was not approved.');
+      if (guard.data === 'new') {
+        if (!/^\d{6,}$/.test(code)) return fail('The code must be 6 or more digits.');
+        if (code !== again) return fail('Confirm the code to create this account.');
+        if (!role) return fail('Choose your trade or role.');
+        const { error } = await sb.auth.signUp({ email: accountEmail(name), password: code, options: { data: { display_name: name, requested_role: role } } });
+        if (error) return fail(/already/i.test(error.message) ? 'That name is already in use.' : error.message);
+        const signed = await sb.auth.signInWithPassword({ email: accountEmail(name), password: code });
+        if (signed.error) return fail(signed.error.message);
+        $('#login-error').classList.add('hidden');
+        await openSession();
+        return;
+      }
+      if (guard.data !== 'ok') return fail('Name or code is wrong.');
       const { error } = await sb.auth.signInWithPassword({ email: accountEmail(name), password: code });
-      if (error) return fail('#login-error', 'Name or code is wrong.');
+      if (error) return fail('Name or code is wrong.');
       $('#login-error').classList.add('hidden');
       await openSession();
-    };
-    $('#create-btn').onclick = async () => {
-      const name = $('#create-name').value.trim();
-      const code = $('#create-code').value;
-      const again = $('#create-code2').value;
-      const role = $('#create-role').value;
-      if (name.length < 2) return fail('#create-error', 'Enter your full name.');
-      if (!/^\d{6,}$/.test(code)) return fail('#create-error', 'The code must be 6 or more digits.');
-      if (code !== again) return fail('#create-error', 'The codes do not match.');
-      if (!role || role === 'Admin') return fail('#create-error', 'Choose a role.');
-      const { error } = await sb.auth.signUp({ email: accountEmail(name), password: code, options: { data: { display_name: name, requested_role: role } } });
-      if (error) return fail('#create-error', /already/i.test(error.message) ? 'That name is already in use. Use a distinct full name.' : error.message);
-      const signed = await sb.auth.signInWithPassword({ email: accountEmail(name), password: code });
-      if (signed.error) return fail('#create-error', signed.error.message);
-      $('#create-error').classList.add('hidden');
-      await openSession();
+      if (role && state.profile && role !== state.profile.role) toast('Your role is locked as ' + tradeLabel(state.profile.role) + '.');
     };
   }
   function paintIdentity() {
     if (!state.user) return;
     const viewing = state.profile?.role === 'Operator' && state.profile?.acting_as ? ' · viewing as ' + tradeLabel(state.profile.acting_as) : '';
-    $('#user-label').textContent = state.user.name + ' · ' + state.user.realRole + viewing;
+    $('#user-label').textContent = state.user.name + ' · ' + state.user.realRole + (state.profile?.status === 'pending' ? ' · read only' : '') + viewing;
+    const banner = $('#readonly-banner');
+    if (banner) {
+      const pending = state.profile?.status === 'pending';
+      banner.classList.toggle('hidden', !pending);
+      if (pending) banner.textContent = readonlyCopy(state.profile);
+    }
     $('#tab-planner').style.display = canPlan() ? '' : 'none';
     $('#tab-admin').style.display = canManageUsers() ? '' : 'none';
     $('#adm-settings')?.classList.toggle('hidden', !isRealAdmin());
@@ -769,6 +765,31 @@
     }
     host.innerHTML = groupedSectionsHtml(list, '') || '<div class="empty">No jobs match.</div>';
   }
+  function nameIs(value) {
+    return String(value || '').trim().toLowerCase() === String(state.user?.name || '').trim().toLowerCase() && !!state.user?.name;
+  }
+  function myJobNote(job) {
+    const bits = [];
+    if (nameIs(job.created_by)) bits.push('Created');
+    if (nameIs(job.completed_by)) bits.push('Completed');
+    if ((job.comments || []).some((c) => nameIs(c.author_name))) bits.push('Commented');
+    if ((job.steps || []).some((s) => (s.assignees || []).some((a) => nameIs(a.person_name) && a.signed_off))) bits.push('Signed off');
+    if ((job.steps || []).some((s) => nameIs(s.permit_holder))) bits.push('Permit holder');
+    if ((job.steps || []).some((s) => nameIs(s.skipped_by))) bits.push('Skipped a step');
+    return bits.join(' · ') || 'Your name is on this job';
+  }
+  function isMyHistory(job) {
+    if (!state.user?.name) return false;
+    if (nameIs(job.created_by) || nameIs(job.completed_by) || nameIs(job.hold_by)) return true;
+    if ((job.comments || []).some((c) => nameIs(c.author_name))) return true;
+    return (job.steps || []).some((s) => nameIs(s.permit_holder) || nameIs(s.skipped_by) || nameIs(s.crew_updated_by) || (s.assignees || []).some((a) => nameIs(a.person_name)));
+  }
+  function renderHistory() {
+    const host = $('#history-list');
+    if (!host) return;
+    const list = state.jobs.filter(isMyHistory);
+    host.innerHTML = list.length ? list.map((job) => '<div class="history-job"><div class="meta" style="margin-bottom:6px"><span class="chip">' + esc(myJobNote(job)) + '</span></div>' + jobCard(job) + '</div>').join('') : '<div class="empty"><strong>No jobs yet</strong><p>Sign off, comment, or create a job and it will show up here under your name.</p></div>';
+  }
   function renderMine() {
     const list = state.jobs.filter(isMyTurn);
     $('#mine-count').textContent = String(list.length);
@@ -956,6 +977,7 @@
   }
   function renderAll() {
     renderMiniStats(); renderJobList(); renderMine(); renderBoard();
+    if (state.view === 'history') renderHistory();
     if (state.view === 'planner') renderPlanner();
     if (state.view === 'audit') renderAudit();
     if (state.view === 'apps') renderApps();
@@ -965,7 +987,7 @@
   function setView(name) {
     state.view = name;
     $$('#main-tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.view === name));
-    ['jobs', 'mine', 'board', 'planner', 'apps', 'dashboards', 'admin', 'audit'].forEach((v) => {
+    ['jobs', 'mine', 'history', 'board', 'planner', 'apps', 'dashboards', 'admin', 'audit'].forEach((v) => {
       $('#view-' + v).classList.toggle('hidden', v !== name);
     });
     renderAll();
@@ -1539,8 +1561,8 @@
   }
 
   function defaultAssignees(trade) {
-    const peeps = state.people.filter((p) => p.trade === trade);
-    return peeps.length ? peeps.map((p) => ({ person_id: p.id, person_name: p.name })) : [{ person_name: tradeLabel(trade) + ' crew' }];
+    if (state.user?.name && state.user.trade === trade) return [{ person_name: state.user.name }];
+    return [{ person_name: tradeLabel(trade) + ' crew' }];
   }
 
   function openJobEditor(existing) {

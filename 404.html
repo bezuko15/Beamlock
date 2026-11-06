@@ -25,29 +25,17 @@
       </div>
       <div id="signin-panel">
         <h1>Sign in</h1>
-        <p>Use the name and code on your account. A new account stays pending until a planner or admin approves it.</p>
+        <p>The first time, your name, code, and trade or role create your account. After that, the same name needs the same code, and the role stays locked.</p>
         <label class="lbl" for="login-name">Name</label>
         <input id="login-name" class="input" autocomplete="username" />
         <label class="lbl" for="login-code">Code</label>
         <input id="login-code" class="input" type="password" inputmode="numeric" autocomplete="current-password" />
+        <label class="lbl" for="login-code2">Confirm code</label>
+        <input id="login-code2" class="input" type="password" inputmode="numeric" autocomplete="new-password" />
+        <label class="lbl" for="login-role">Trade or role</label>
+        <select id="login-role" class="select"></select>
         <p id="login-error" class="hold-banner hidden"></p>
         <button class="btn btn-primary btn-block" style="margin-top:16px" id="login-btn" type="button">Sign in</button>
-        <button class="btn btn-block" style="margin-top:8px" id="show-create" type="button">Create account</button>
-      </div>
-      <div id="create-panel" class="hidden">
-        <h1>Create account</h1>
-        <p>Request a role. You will not see jobs until a planner or admin approves it.</p>
-        <label class="lbl" for="create-name">Full name</label>
-        <input id="create-name" class="input" autocomplete="name" />
-        <label class="lbl" for="create-code">Code (6 or more digits)</label>
-        <input id="create-code" class="input" type="password" inputmode="numeric" autocomplete="new-password" />
-        <label class="lbl" for="create-code2">Confirm code</label>
-        <input id="create-code2" class="input" type="password" inputmode="numeric" autocomplete="new-password" />
-        <label class="lbl" for="create-role">Requested role</label>
-        <select id="create-role" class="select"></select>
-        <p id="create-error" class="hold-banner hidden"></p>
-        <button class="btn btn-primary btn-block" style="margin-top:16px" id="create-btn" type="button">Request account</button>
-        <button class="btn btn-block" style="margin-top:8px" id="show-signin" type="button">Back to sign in</button>
       </div>
     </div>
   </div>
@@ -83,6 +71,7 @@
     <div id="net-banner" class="net-banner hidden" role="status"></div>
     <div id="pull-hint" class="pull-hint hidden">Release to refresh</div>
     <main class="layout">
+      <div id="readonly-banner" class="hold-banner hidden">Read only until your role is approved.</div>
       <div class="safety-banner" id="safety-banner">
         <strong>Safety notice:</strong> Sign-offs track work progress only. They do <em>not</em> issue or approve permits and do <em>not</em> authorize isolations or LOTO.
       </div>
@@ -90,6 +79,7 @@
       <div class="tabs" id="main-tabs">
         <button class="tab active" data-view="jobs">Jobs</button>
         <button class="tab" data-view="mine">My trade <span class="badge" id="mine-count">0</span></button>
+        <button class="tab" data-view="history">My jobs</button>
         <button class="tab" data-view="board">Live board</button>
         <button class="tab" data-view="planner" id="tab-planner">Planner</button>
         <button class="tab" data-view="apps">Apps</button>
@@ -134,6 +124,11 @@
       <section id="view-mine" class="hidden">
         <p style="color:var(--muted);margin-top:0">Jobs where your trade is ready or in progress.</p>
         <div class="job-grid" id="mine-list"></div>
+      </section>
+
+      <section id="view-history" class="hidden">
+        <p style="color:var(--muted);margin-top:0">Jobs where your name is on a sign-off, comment, permit, or the job itself.</p>
+        <div class="job-grid" id="history-list"></div>
       </section>
 
       <section id="view-board" class="hidden board-view">

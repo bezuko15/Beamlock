@@ -15,8 +15,8 @@ Do **not** use the Supabase Edge Function URL for the app UI (wrong MIME / CSP i
 ## Sign in
 
 1. Open the live URL on phone or laptop
-2. Sign in with your name and code, or create an account and wait for approval
-3. A trade account only acts on that trade. Planner can import and manage jobs. Admin manages users and settings. An operator can view as any role except Admin
+2. First sign-in: name, code, and trade or role. That creates the account. Trade roles and Operator are in immediately. Planner, Supervisor, and Admin can look around until approved, then the role is locked.
+3. The same name always needs the same code. A scaffolder cannot later sign in as a planner.
 
 ## Maintenance schedule import
 
