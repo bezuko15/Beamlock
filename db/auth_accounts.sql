@@ -606,7 +606,7 @@ begin
   elsif action = 'deactivate' then
     if target = auth.uid() then raise exception 'not allowed'; end if;
     update public.profiles set status = 'deactivated', acting_as = null where id = target;
-    update auth.users set banned_until = 'infinity' where id = target;
+    update auth.users set banned_until = timestamptz '2099-01-01 00:00:00+00' where id = target;
   elsif action = 'reactivate' then
     update public.profiles set status = 'approved', failed_attempts = 0, locked_until = null where id = target;
     update auth.users set banned_until = null where id = target;
