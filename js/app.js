@@ -4,7 +4,9 @@
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   const cfg = window.BEAMLOCK_CONFIG;
   const { createClient } = window.supabase;
-  const sb = createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+  const sb = createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+  });
 
   const DEFAULT_TRADES = [
     { id: 'Insulator', label: 'Insulators', short: 'INS', color: '#5b21b6', active: true },
@@ -266,35 +268,8 @@
   }
 
   async function refreshStepReadiness(jobId) {
-    const { data: steps } = await sb.from('steps').select('*, step_assignees(*)').eq('job_id', jobId).order('sort_order');
-    if (!steps) return;
-    for (let i = 0; i < steps.length; i++) {
-      const step = steps[i];
-      const assignees = step.step_assignees || [];
-      if (step.status === 'skipped') continue;
-      const allSigned = assignees.length > 0 && assignees.every((a) => a.signed_off);
-      if (allSigned) { await sb.from('steps').update({ status: 'done' }).eq('id', step.id); step.status = 'done'; continue; }
-      let previousDone = true;
-      if (i > 0) previousDone = steps[i - 1].status === 'done' || steps[i - 1].status === 'skipped';
-      const anySigned = assignees.some((a) => a.signed_off);
-      let status = 'pending';
-      if (!previousDone) status = 'pending';
-      else if (anySigned) status = 'in_progress';
-      else status = 'ready';
-      await sb.from('steps').update({ status }).eq('id', step.id);
-      step.status = status;
-    }
-    const { data: job } = await sb.from('jobs').select('*').eq('id', jobId).single();
-    if (!job) return;
-    if (job.on_hold) { await sb.from('jobs').update({ status: 'on_hold', updated_at: new Date().toISOString() }).eq('id', jobId); return; }
-    if (job.completed_at) { await sb.from('jobs').update({ status: 'done', updated_at: new Date().toISOString() }).eq('id', jobId); return; }
-    const { data: steps2 } = await sb.from('steps').select('status').eq('job_id', jobId);
-    const allDone = steps2.length && steps2.every((s) => s.status === 'done');
-    const anyActive = steps2.some((s) => s.status === 'done' || s.status === 'skipped' || s.status === 'ready' || s.status === 'in_progress');
-    let status = 'not_started';
-    if (allDone) status = 'done';
-    else if (anyActive) status = 'in_progress';
-    await sb.from('jobs').update({ status, updated_at: new Date().toISOString() }).eq('id', jobId);
+    const { error } = await sb.rpc('advance_job', { target_job: jobId });
+    if (error) throw new Error(error.message);
   }
 
   async function loadFullJobs() {
@@ -424,41 +399,185 @@
     }
   }
 
-  async function initLogin() {
-    await loadMeta();
-    $('#people-list').innerHTML = state.people.map((p) => '<option value="' + esc(p.name) + '">').join('');
-    const grid = $('#role-grid');
-    grid.innerHTML = signInRoles().map((r) => '<button type="button" class="role-btn" data-role="' + esc(r.id) + '">' + esc(r.label) + '</button>').join('');
-    let selected = null;
-    grid.onclick = (e) => {
-      const b = e.target.closest('.role-btn'); if (!b) return;
-      $$('.role-btn', grid).forEach((x) => x.classList.remove('on'));
-      b.classList.add('on'); selected = b.dataset.role;
-      const match = state.people.find((p) => p.role === selected);
-      if (match && !$('#login-name').value) $('#login-name').value = match.name;
+  function accountEmail(name) {
+    const slug = String(name || '').trim().toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '.').replace(/^\.+|\.+$/g, '');
+    return (slug || 'user') + '@beamlock.local';
+  }
+  function isRealAdmin() { return state.profile?.status === 'approved' && state.profile?.role === 'Admin'; }
+  function canManageUsers() { return state.profile?.status === 'approved' && ['Admin', 'Planner'].includes(state.user?.role); }
+  function canPlan() { return ['Admin', 'Planner'].includes(state.user?.role); }
+  function canSupervise() { return ['Admin', 'Planner', 'Supervisor'].includes(state.user?.role); }
+  function canActOnStep(step) {
+    if (state.profile?.status !== 'approved') return false;
+    if (canSupervise()) return true;
+    return !!state.user?.trade && state.user.trade === step.trade;
+  }
+  function applyProfile(p) {
+    state.profile = p;
+    const staff = ['Admin', 'Planner', 'Supervisor', 'Operator'];
+    const eff = p.status === 'approved' && p.role === 'Operator' && p.acting_as ? p.acting_as : p.role;
+    state.user = {
+      name: p.display_name,
+      role: p.status === 'approved' ? eff : p.role,
+      realRole: p.role,
+      actingAs: p.acting_as || '',
+      trade: p.status === 'approved' && !staff.includes(eff) ? eff : null,
+      personId: p.id,
+      status: p.status,
     };
-    $('#login-btn').onclick = () => {
+  }
+  function showLogin(message) {
+    $('#app')?.classList.add('hidden');
+    $('#gate')?.classList.add('hidden');
+    $('#login')?.classList.remove('hidden');
+    const err = $('#login-error');
+    if (err) { err.textContent = message || ''; err.classList.toggle('hidden', !message); }
+  }
+  function showGate(profile) {
+    $('#login').classList.add('hidden');
+    $('#app').classList.add('hidden');
+    $('#gate').classList.remove('hidden');
+    const rejected = profile.status === 'rejected';
+    $('#gate-title').textContent = rejected ? 'Account not approved' : 'Waiting for approval';
+    $('#gate-copy').textContent = rejected
+      ? 'A planner or admin did not approve this account.'
+      : 'Your account is pending. A planner or admin has to approve your role before you can open jobs. Requested role: ' + (profile.requested_role || profile.role) + '.';
+  }
+  async function signOut(message) {
+    try { if (state.channels.main) sb.removeChannel(state.channels.main); } catch (_) {}
+    try { if (state.channels.profile) sb.removeChannel(state.channels.profile); } catch (_) {}
+    if (state.profileTimer) clearInterval(state.profileTimer);
+    state.profileTimer = null;
+    state.channels = {};
+    state.user = null;
+    state.profile = null;
+    state.jobs = [];
+    try { await sb.auth.signOut(); } catch (_) {}
+    showLogin(message || '');
+  }
+  async function loadSignupRoles() {
+    const { data, error } = await sb.rpc('signup_roles');
+    if (error) throw error;
+    const roles = Array.isArray(data) ? data : [];
+    const sel = $('#create-role');
+    if (sel) sel.innerHTML = roles.map((r) => '<option value="' + esc(r.id) + '">' + esc(r.label) + '</option>').join('');
+    return roles;
+  }
+  function watchProfile(id) {
+    if (state.channels.profile) sb.removeChannel(state.channels.profile);
+    if (state.profileTimer) clearInterval(state.profileTimer);
+    state.profileTimer = setInterval(async () => {
+      if (!state.profile?.id) return;
+      const { data } = await sb.from('profiles').select('status').eq('id', state.profile.id).maybeSingle();
+      if (data?.status === 'deactivated') signOut('This account is deactivated.');
+    }, 8000);
+    state.channels.profile = sb.channel('profile-' + id)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles', filter: 'id=eq.' + id }, async (payload) => {
+        const next = payload.new;
+        if (!next) return;
+        if (next.status === 'deactivated') { await signOut('This account is deactivated.'); return; }
+        applyProfile(next);
+        if (next.status !== 'approved') { showGate(next); return; }
+        if ($('#app').classList.contains('hidden')) { await enterApp(); return; }
+        paintIdentity();
+        renderAll();
+      })
+      .subscribe();
+  }
+  async function openSession() {
+    const { data: userData, error: userError } = await sb.auth.getUser();
+    if (userError || !userData?.user) { showLogin('Name or code is wrong.'); return; }
+    const { data: profile, error } = await sb.from('profiles').select('*').eq('id', userData.user.id).single();
+    if (error || !profile) { await signOut('This account has no profile.'); return; }
+    if (profile.status === 'deactivated') { await signOut('This account is deactivated.'); return; }
+    applyProfile(profile);
+    watchProfile(profile.id);
+    if (profile.status !== 'approved') { showGate(profile); return; }
+    await sb.rpc('touch_sign_in');
+    await enterApp();
+  }
+  function bindAuth() {
+    const fail = (id, message) => { const el = $(id); if (!el) return; el.textContent = message; el.classList.remove('hidden'); };
+    $('#show-create').onclick = async () => {
+      $('#signin-panel').classList.add('hidden');
+      $('#create-panel').classList.remove('hidden');
+      try { await loadSignupRoles(); } catch (e) { fail('#create-error', e.message); }
+    };
+    $('#show-signin').onclick = () => {
+      $('#create-panel').classList.add('hidden');
+      $('#signin-panel').classList.remove('hidden');
+    };
+    $('#gate-signout').onclick = () => signOut('');
+    $('#login-btn').onclick = async () => {
       const name = $('#login-name').value.trim();
-      if (!name) return toast('Enter your name');
-      if (!selected) return toast('Pick a role');
-      const pin = $('#login-pin').value.trim();
-      if (pin && pin !== cfg.demoPin) return toast('Wrong demo PIN (hint: 1234)');
-      const person = state.people.find((p) => p.name.toLowerCase() === name.toLowerCase());
-      saveUser({ name: person?.name || name, role: selected, trade: roleTrade(selected) || person?.trade || null, personId: person?.id || null });
-      enterApp();
+      const code = $('#login-code').value;
+      if (!name || !code) return fail('#login-error', 'Enter your name and code.');
+      const guard = await sb.rpc('login_guard', { person: name, code });
+      if (guard.error) return fail('#login-error', guard.error.message);
+      if (guard.data === 'locked') return fail('#login-error', 'Too many wrong codes. Try again in 15 minutes.');
+      if (guard.data === 'deactivated') return fail('#login-error', 'This account is deactivated.');
+      if (guard.data !== 'ok') return fail('#login-error', 'Name or code is wrong.');
+      const { error } = await sb.auth.signInWithPassword({ email: accountEmail(name), password: code });
+      if (error) return fail('#login-error', 'Name or code is wrong.');
+      $('#login-error').classList.add('hidden');
+      await openSession();
+    };
+    $('#create-btn').onclick = async () => {
+      const name = $('#create-name').value.trim();
+      const code = $('#create-code').value;
+      const again = $('#create-code2').value;
+      const role = $('#create-role').value;
+      if (name.length < 2) return fail('#create-error', 'Enter your full name.');
+      if (!/^\d{6,}$/.test(code)) return fail('#create-error', 'The code must be 6 or more digits.');
+      if (code !== again) return fail('#create-error', 'The codes do not match.');
+      if (!role || role === 'Admin') return fail('#create-error', 'Choose a role.');
+      const { error } = await sb.auth.signUp({ email: accountEmail(name), password: code, options: { data: { display_name: name, requested_role: role } } });
+      if (error) return fail('#create-error', /already/i.test(error.message) ? 'That name is already in use. Use a distinct full name.' : error.message);
+      const signed = await sb.auth.signInWithPassword({ email: accountEmail(name), password: code });
+      if (signed.error) return fail('#create-error', signed.error.message);
+      $('#create-error').classList.add('hidden');
+      await openSession();
+    };
+  }
+  function paintIdentity() {
+    if (!state.user) return;
+    const viewing = state.profile?.role === 'Operator' && state.profile?.acting_as ? ' · viewing as ' + tradeLabel(state.profile.acting_as) : '';
+    $('#user-label').textContent = state.user.name + ' · ' + state.user.realRole + viewing;
+    $('#tab-planner').style.display = canPlan() ? '' : 'none';
+    $('#tab-admin').style.display = canManageUsers() ? '' : 'none';
+    $('#adm-settings')?.classList.toggle('hidden', !isRealAdmin());
+    $('#act-as-wrap')?.classList.toggle('hidden', state.profile?.role !== 'Operator');
+    if (!canPlan() && state.view === 'planner') setView('jobs');
+    if (!canManageUsers() && state.view === 'admin') setView('jobs');
+  }
+  async function fillActAs() {
+    const sel = $('#act-as');
+    if (!sel || state.profile?.role !== 'Operator') return;
+    const roles = await loadSignupRoles();
+    const current = state.profile.acting_as || '';
+    sel.innerHTML = '<option value="">Operator</option>' + roles.filter((r) => r.id !== 'Admin').map((r) => '<option value="' + esc(r.id) + '"' + (current === r.id ? ' selected' : '') + '>' + esc(r.label) + '</option>').join('');
+    sel.onchange = async () => {
+      const { error } = await sb.rpc('set_acting_as', { next_role: sel.value });
+      if (error) return toast(error.message);
+      const { data: profile, error: readError } = await sb.from('profiles').select('*').eq('id', state.profile.id).single();
+      if (readError) return toast(readError.message);
+      applyProfile(profile);
+      await audit(null, 'act_as', profile.acting_as ? 'Operator ' + profile.display_name + ' acting as ' + profile.acting_as : 'Operator ' + profile.display_name + ' returned to Operator');
+      paintIdentity();
+      renderAll();
     };
   }
 
-  function enterApp() {
+  async function enterApp() {
     $('#login').classList.add('hidden');
+    $('#gate').classList.add('hidden');
     $('#app').classList.remove('hidden');
-    $('#user-label').textContent = state.user.name + ' · ' + state.user.role;
-    const canPlan = ['Planner', 'Supervisor'].includes(state.user.role);
-    $('#tab-planner').style.display = canPlan ? '' : 'none';
-    $('#tab-admin').style.display = canPlan ? '' : 'none';
+    paintIdentity();
+    fillActAs().catch(() => {});
     restoreFilters();
     syncFilterControls();
     renderDataSource();
+    if (state.channels.main) { try { sb.removeChannel(state.channels.main); } catch (_) {} }
     subscribeRealtime();
     refreshAll(true);
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
@@ -794,9 +913,46 @@
     const mapEl = $('#adm-unit-map');
     if (mapEl) mapEl.value = formatUnitPatterns(getUnitPatterns());
     renderTradeAdmin();
+    renderUsers();
     $('#adm-tiles').innerHTML = state.tiles.map((t, i) =>
       '<div class="tile-edit" data-i="' + i + '"><input class="input" data-k="icon" value="' + esc(t.icon || '') + '" /><input class="input" data-k="name" value="' + esc(t.name || '') + '" /><input class="input" data-k="url" value="' + esc(t.url || '') + '" placeholder="https://…" /><input class="input" data-k="description" value="' + esc(t.description || '') + '" style="grid-column:1/-1" /></div>'
     ).join('');
+  }
+  async function renderUsers() {
+    const host = $('#adm-users');
+    if (!host || !canManageUsers()) return;
+    const { data, error } = await sb.from('profiles').select('*').order('created_at', { ascending: true });
+    if (error) { host.innerHTML = '<p class="hold-banner">' + esc(error.message) + '</p>'; return; }
+    const roles = (isRealAdmin() ? [{ id: 'Admin', label: 'Admin' }] : []).concat([
+      { id: 'Planner', label: 'Planner' }, { id: 'Supervisor', label: 'Supervisor' }, { id: 'Operator', label: 'Operator' },
+    ]).concat(activeTrades().map((t) => ({ id: t.id, label: t.label })));
+    host.innerHTML = (data || []).map((p) => {
+      const locked = p.role === 'Admin' && !isRealAdmin();
+      const options = roles.map((r) => '<option value="' + esc(r.id) + '"' + (p.role === r.id ? ' selected' : '') + '>' + esc(r.label) + '</option>').join('');
+      const actions = locked ? '' : '<button type="button" class="btn btn-sm btn-primary" data-user-act="approve">Approve</button><button type="button" class="btn btn-sm" data-user-act="set_role">Save role</button><button type="button" class="btn btn-sm" data-user-act="reject">Reject</button><button type="button" class="btn btn-sm" data-user-act="reset">Reset code</button>' + (p.status === 'deactivated' ? '<button type="button" class="btn btn-sm" data-user-act="reactivate">Reactivate</button>' : '<button type="button" class="btn btn-sm" data-user-act="deactivate">Deactivate</button>');
+      return '<div class="user-row" data-user="' + esc(p.id) + '"><div><strong>' + esc(p.display_name) + '</strong><div style="color:var(--muted);font-size:13px">' + esc(p.status) + (p.requested_role && p.requested_role !== p.role ? ' · requested ' + esc(p.requested_role) : '') + '</div></div><select class="select" data-role' + (locked ? ' disabled' : '') + '>' + options + '</select><div>' + esc(tradeLabel(p.role)) + '</div><div>' + (p.last_sign_in_at ? 'Last sign-in ' + fmtTime(p.last_sign_in_at) : 'Never signed in') + '</div><div class="user-actions">' + actions + '</div></div>';
+    }).join('') || '<div class="empty"><strong>No accounts yet</strong><p>New requests show up here.</p></div>';
+    host.querySelectorAll('[data-user-act]').forEach((btn) => {
+      btn.onclick = async () => {
+        const row = btn.closest('[data-user]');
+        const id = row.dataset.user;
+        const role = row.querySelector('[data-role]')?.value || '';
+        const act = btn.dataset.userAct;
+        if (act === 'reset') {
+          const code = prompt('New code (6 or more digits)');
+          if (!code) return;
+          if (!/^\d{6,}$/.test(code.trim())) return toast('Code must be 6 or more digits');
+          const { error: resetError } = await sb.rpc('reset_user_code', { target: id, new_code: code.trim() });
+          if (resetError) return toast(resetError.message);
+          toast('Code reset');
+          return;
+        }
+        const { error: manageError } = await sb.rpc('manage_account', { target: id, action: act, new_role: role });
+        if (manageError) return toast(manageError.message);
+        toast('Account updated');
+        await renderUsers();
+      };
+    });
   }
   function renderAll() {
     renderMiniStats(); renderJobList(); renderMine(); renderBoard();
@@ -1021,7 +1177,8 @@
 
   function showJobModal(job) {
     const root = $('#modal-root');
-    const canPlan = ['Planner', 'Supervisor'].includes(state.user.role);
+    const plan = canPlan();
+    const manage = canSupervise();
     const wait = waitingTrade(job);
     const place = puForUnit(job.unit);
     const tpl = state.settings?.url_templates || {};
@@ -1064,23 +1221,23 @@
       '<div class="permit-status unavailable"><strong>UNAVAILABLE</strong> · source: Permit Vision (stub — not connected) · as of ' + fmtTime(new Date().toISOString()) +
       '<div>Live permit status unavailable. Do not treat as approved. Configure Permit Vision via Shell IT (see INTEGRATIONS.md).</div></div>' +
       '<p class="permit-status-note">External permit status is informational only. Grey/warning means not validated — never treat as approved.</p>' +
-      '<section class="section-block"><h3>Overview / permit</h3>' + commentBox((job.comments || []).filter((c) => commentSection(c) === 'overview'), 'data-section="overview"') + '</section>' +
+      '<section class="section-block"><h3>Overview / permit</h3>' + commentBox((job.comments || []).filter((c) => commentSection(c) === 'overview'), 'data-section="overview"', manage) + '</section>' +
       '<h3 style="margin-bottom:8px">Trade steps</h3><div class="step-list">' +
       job.steps.map((s) => stepHtml(s, job)).join('') +
-      '</div><section class="section-block"><h3>Operators</h3>' + commentBox((job.comments || []).filter((c) => commentSection(c) === 'operators'), 'data-section="operators"') + '</section>' +
-      '<section class="section-block"><h3>General</h3>' + commentBox((job.comments || []).filter((c) => commentSection(c) === 'general'), 'data-section="general"') + '</section>' +
+      '</div><section class="section-block"><h3>Operators</h3>' + commentBox((job.comments || []).filter((c) => commentSection(c) === 'operators'), 'data-section="operators"', manage) + '</section>' +
+      '<section class="section-block"><h3>General</h3>' + commentBox((job.comments || []).filter((c) => commentSection(c) === 'general'), 'data-section="general"', manage) + '</section>' +
       ((job.status === 'done' || job.completed_at)
         ? '<div class="complete-banner">Job complete' + (job.completed_by ? ' · ' + esc(job.completed_by) : '') + (job.completed_at ? ' · ' + fmtTime(job.completed_at) : '') + '</div>'
         : '') +
       '<h3 style="margin-top:20px">Audit trail</h3><div class="audit-list">' +
       (job.audit || []).slice(0, 40).map((a) => '<div class="audit-item"><div class="t">' + fmtTime(a.created_at) + ' · ' + esc(a.actor_name || '') + '</div><div><strong>' + esc(a.action) + '</strong> ' + esc(a.detail || '') + '</div></div>').join('') +
-      '</div></div><div class="modal-dock">' +
-      (job.on_hold ? '<button class="btn btn-success btn-sm" data-act="clear-hold">Clear hold</button>' : '<button class="btn btn-danger btn-sm" data-act="hold">Flag on hold</button>') +
-      (canPlan ? '<button class="btn btn-sm" data-act="edit">Edit job</button><button class="btn btn-sm" data-act="archive">Archive</button>' : '') +
-      ((job.status === 'done' || job.completed_at)
+      '</div></div>' + (manage || plan ? '<div class="modal-dock">' +
+      (manage ? (job.on_hold ? '<button class="btn btn-success btn-sm" data-act="clear-hold">Clear hold</button>' : '<button class="btn btn-danger btn-sm" data-act="hold">Flag on hold</button>') : '') +
+      (plan ? '<button class="btn btn-sm" data-act="edit">Edit job</button><button class="btn btn-sm" data-act="archive">Archive</button>' : '') +
+      (manage ? ((job.status === 'done' || job.completed_at)
         ? '<button type="button" class="btn btn-block" id="job-reopen">Reopen job</button>'
-        : '<button type="button" class="btn btn-primary btn-block job-complete" id="job-complete">Job complete</button>') +
-      '</div></div></div>';
+        : '<button type="button" class="btn btn-primary btn-block job-complete" id="job-complete">Job complete</button>') : '') +
+      '</div>' : '') + '</div></div>';
 
     $$('[data-utl]', root).forEach((btn) => { btn.onclick = () => copyText(buildUtlLog(job, { notes: btn.dataset.utl })); });
     $$('[data-copy-comment]', root).forEach((btn) => {
@@ -1122,6 +1279,8 @@
     $$('.circle', root).forEach((c) => {
       c.onclick = async () => {
         const id = c.dataset.assignee; const signed = c.classList.contains('signed');
+        const step = job.steps.find((s) => (s.assignees || []).some((a) => a.id === id));
+        if (!step || !canActOnStep(step)) return toast('That step belongs to another trade');
         try {
           if (signed) {
             const reason = prompt('Reason for un-signing (required for audit):'); if (!reason) return;
@@ -1276,10 +1435,10 @@
     return '<div class="comment"><div class="who"><span>' + esc(c.author_name) + ' · ' + esc(c.author_role) + ' · ' + fmtTime(c.created_at) + '</span><button type="button" class="btn btn-sm" data-copy-comment="' + esc(c.id) + '">Copy to UTL log</button></div><div>' + esc(c.body) + '</div>' +
       (photos ? '<div class="comment-photos">' + photos + '</div>' : '') + '</div>';
   }
-  function commentBox(items, attrs) {
-    return '<div class="comment-thread">' + (items.length ? items.map(commentCard).join('') : '<div class="empty">No comments yet.</div>') +
-      '<form class="comment-form" ' + attrs + '><label class="lbl">Add comment</label><textarea class="textarea" name="body" placeholder="Add a comment…"></textarea>' +
-      '<div class="row"><input type="file" name="photos" accept="image/*" capture="environment" multiple /><button class="btn btn-primary btn-sm" type="submit">Add comment</button></div></form></div>';
+  function commentBox(items, attrs, allowForm) {
+    const form = allowForm === false ? '' : '<form class="comment-form" ' + attrs + '><label class="lbl">Add comment</label><textarea class="textarea" name="body" placeholder="Add a comment…"></textarea>' +
+      '<div class="row"><input type="file" name="photos" accept="image/*" capture="environment" multiple /><button class="btn btn-primary btn-sm" type="submit">Add comment</button></div></form>';
+    return '<div class="comment-thread">' + (items.length ? items.map(commentCard).join('') : '<div class="empty">No comments yet.</div>') + form + '</div>';
   }
   const CREW_FRESH_MS = 15 * 60 * 1000;
   function readCrew(step) {
@@ -1305,28 +1464,30 @@
     const holder = crew.showValues ? crew.holder : '';
     const channel = crew.showValues ? crew.channel : '';
     return '<div class="crew-panel ' + (prominent ? 'prominent' : 'compact') + (crew.unavailable ? ' unavailable' : '') + '">' +
-      '<label class="crew-field"><span class="k">Permit holder</span><input class="input" data-crew-field="permit_holder" data-step="' + step.id + '" value="' + esc(holder) + '" placeholder="Name" /></label>' +
-      '<label class="crew-field"><span class="k">Radio channel</span><input class="input" data-crew-field="radio_channel" data-step="' + step.id + '" value="' + esc(channel) + '" placeholder="Ch" /></label>' +
+      '<label class="crew-field"><span class="k">Permit holder</span><input class="input" data-crew-field="permit_holder" data-step="' + step.id + '" value="' + esc(holder) + '" placeholder="Name"' + (step._locked ? ' readonly' : '') + ' /></label>' +
+      '<label class="crew-field"><span class="k">Radio channel</span><input class="input" data-crew-field="radio_channel" data-step="' + step.id + '" value="' + esc(channel) + '" placeholder="Ch"' + (step._locked ? ' readonly' : '') + ' /></label>' +
       '<div class="crew-source">' + esc(crew.sourceText) + '</div></div>';
   }
   function stepHtml(s, job) {
-    const canSign = !job.on_hold && (s.status === 'ready' || s.status === 'in_progress' || s.status === 'done');
+    const act = canActOnStep(s);
+    const canSign = act && !job.on_hold && (s.status === 'ready' || s.status === 'in_progress' || s.status === 'done');
     const skipped = s.status === 'skipped';
     const notes = (job.comments || []).filter((c) => c.step_id === s.id);
     const people = skipped ? '' : (s.assignees || []).map((a) => {
       const mine = state.user && a.person_name.toLowerCase() === state.user.name.toLowerCase();
-      const readyMe = !a.signed_off && canSign && (mine || state.user?.trade === s.trade || ['Planner', 'Supervisor'].includes(state.user?.role));
+      const readyMe = !a.signed_off && canSign && (mine || state.user?.trade === s.trade || canSupervise());
       return '<div class="person-sign"><button type="button" class="circle ' + (a.signed_off ? 'signed' : '') + (readyMe ? ' ready-me' : '') + '" data-assignee="' + a.id + '">' + (a.signed_off ? '✓' : '') + '</button>' +
-        '<div class="person-name">' + esc(a.person_name) + '</div><div class="person-time">' + (a.signed_at ? fmtTime(a.signed_at) : 'tap to sign') + '</div></div>';
-    }).join('') + '<button class="btn btn-sm" data-add-person="' + s.id + '">+ person</button>';
+        '<div class="person-name">' + esc(a.person_name) + '</div><div class="person-time">' + (a.signed_at ? fmtTime(a.signed_at) : (act ? 'tap to sign' : '')) + '</div></div>';
+    }).join('') + (canPlan() ? '<button class="btn btn-sm" data-add-person="' + s.id + '">+ person</button>' : '');
     const skipControl = skipped
-      ? '<div class="skip-banner">Skipped' + (s.skipped_by ? ' · ' + esc(s.skipped_by) : '') + (s.skipped_at ? ' · ' + fmtTime(s.skipped_at) : '') + (s.skip_reason ? ' — ' + esc(s.skip_reason) : '') + '</div><button type="button" class="btn btn-sm" data-unskip="' + s.id + '">Undo skip</button>'
-      : '<button type="button" class="btn btn-sm" data-skip="' + s.id + '">Skip / Already complete</button>';
+      ? '<div class="skip-banner">Skipped' + (s.skipped_by ? ' · ' + esc(s.skipped_by) : '') + (s.skipped_at ? ' · ' + fmtTime(s.skipped_at) : '') + (s.skip_reason ? ' — ' + esc(s.skip_reason) : '') + '</div>' + (act ? '<button type="button" class="btn btn-sm" data-unskip="' + s.id + '">Undo skip</button>' : '')
+      : (act ? '<button type="button" class="btn btn-sm" data-skip="' + s.id + '">Skip / Already complete</button>' : '');
     const active = s.status === 'ready' || s.status === 'in_progress';
+    const shown = { ...s, _locked: !act };
     return '<div class="step-row ' + s.status + '"><div class="step-head"><div class="step-label">' + esc(s.label) + ' <span class="chip" style="--tc:' + esc(tradeColor(s.trade)) + ';border-color:var(--tc)">' + esc(tradeLabel(s.trade)) + '</span></div><div class="chip' + (skipped ? ' skip' : '') + '">' + (skipped ? 'Skipped' : esc(String(s.status).replaceAll('_', ' '))) + '</div></div>' +
-      crewPanel(s, active) +
+      crewPanel(shown, active) +
       beamStepHtml(s) +
-      (people ? '<div class="assignees">' + people + '</div>' : '') + skipControl + commentBox(notes, 'data-step="' + s.id + '"') + '</div>';
+      (people ? '<div class="assignees">' + people + '</div>' : '') + skipControl + commentBox(notes, 'data-step="' + s.id + '"', act) + '</div>';
   }
   function chooseDialog({ title, messageHtml, picks, allowEmpty, okLabel }) {
     return new Promise((resolve) => {
@@ -1504,7 +1665,7 @@
     return '<div class="beam-info">' + bits.map((t) => '<span class="chip">' + esc(t) + '</span>').join('') + (due ? '<span class="chip ' + due.cls + '">' + esc(due.label) + '</span>' : '') + '</div>';
   }
   function unitTapHtml(job) {
-    if (!['Planner', 'Supervisor'].includes(state.user?.role)) return '';
+    if (!canSupervise()) return '';
     return '<div class="unit-tap"><span class="lbl">Unit</span>' + listUnits().map((u) => '<button type="button" class="unit-chip' + (job.unit === u ? ' on' : '') + '" data-set-unit="' + esc(u) + '">' + esc(u) + '</button>').join('') + '</div>';
   }
   function beamStepHtml(s) {
@@ -1966,7 +2127,7 @@
     $('#btn-import').onclick = openImport;
     $('#btn-export').onclick = exportExcel;
     $('#btn-audit-refresh').onclick = renderAudit;
-    $('#btn-logout').onclick = () => { localStorage.removeItem('bl_user'); location.reload(); };
+    $('#btn-logout').onclick = () => signOut('');
     const applyHc = (on) => {
       document.documentElement.classList.toggle('hc', !!on);
       const btn = $('#btn-hc');
@@ -2067,7 +2228,10 @@
   }
 
   bind();
-  const existing = loadUser();
-  initLogin().then(() => { if (existing?.name && existing?.role) { state.user = existing; enterApp(); } })
-    .catch((e) => { console.error(e); toast('Failed to load: ' + e.message); });
+  bindAuth();
+  sb.auth.getUser().then(({ data }) => {
+    if (data?.user) return openSession();
+    showLogin('');
+    return loadSignupRoles();
+  }).catch((e) => { console.error(e); showLogin('Could not reach the account service.'); });
 })();

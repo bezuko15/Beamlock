@@ -2,7 +2,7 @@
 
 **Trade sign-off. Real time.**
 
-Static PWA + Supabase Free (ca-central-1). Demo auth only — production would use Entra ID.
+Static PWA + Supabase Free (ca-central-1). Sign-in is a name and code. New accounts stay pending until a planner or admin approves the role.
 
 ## Live URL (GitHub Pages)
 
@@ -14,10 +14,9 @@ Do **not** use the Supabase Edge Function URL for the app UI (wrong MIME / CSP i
 
 ## Sign in
 
-1. Open the live URL on phone or laptop  
-2. Name: **Chris Alvarez**, **Alex Rivera**, **Sam Okonkwo**, etc.  
-3. Pick a role (Planner / Supervisor see Planner + Admin)  
-4. Optional PIN: **1234**
+1. Open the live URL on phone or laptop
+2. Sign in with your name and code, or create an account and wait for approval
+3. A trade account only acts on that trade. Planner can import and manage jobs. Admin manages users and settings. An operator can view as any role except Admin
 
 ## Maintenance schedule import
 

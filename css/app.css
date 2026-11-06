@@ -58,6 +58,12 @@ a { color: var(--steel); }
   background: #fff; color: #1a2332; border: 2px solid #fff; font-weight: 800;
 }
 .header-btn[aria-pressed="true"] { background: var(--amber); color: #1a1208; border-color: var(--amber); }
+.header-actas { display: inline-flex; align-items: center; gap: 6px; background: #fff; color: #1a2332; border: 2px solid #fff; border-radius: 10px; padding: 4px 8px; font-weight: 800; font-size: 13px; }
+.header-actas select { min-height: 36px; border: 0; background: transparent; color: #1a2332; font-weight: 800; }
+html.hc .header-actas, html.hc .header-actas select { background: #ffcc00; color: #000; border-color: #fff; }
+.user-row { display: grid; gap: 8px; grid-template-columns: 1.4fr .8fr .8fr .9fr auto; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.user-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+@media (max-width: 800px) { .user-row { grid-template-columns: 1fr; } }
 .header-btn:focus-visible, .tab:focus-visible, .btn:focus-visible { outline: 3px solid var(--amber); outline-offset: 2px; }
 @media (max-width: 720px) {
   .header-actions { width: 100%; margin-left: 0; }

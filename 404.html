@@ -23,17 +23,44 @@
         <img src="./icons/icon-192.png" alt="Beamlock" />
         <div>BEAMLOCK<span class="sub" style="color:var(--muted)">Trade sign-off. Real time.</span></div>
       </div>
-      <h1>Sign in</h1>
-      <p>Pick your name and role. Prototype auth — production would use Microsoft Entra ID SSO.</p>
-      <label class="lbl">Your name</label>
-      <input id="login-name" class="input" list="people-list" placeholder="e.g. Chris Alvarez" autocomplete="name" />
-      <datalist id="people-list"></datalist>
-      <label class="lbl" style="margin-top:12px">Role</label>
-      <div class="role-grid" id="role-grid"></div>
-      <label class="lbl">Demo PIN (optional)</label>
-      <input id="login-pin" class="input" type="password" inputmode="numeric" placeholder="1234" />
-      <button class="btn btn-primary btn-block" style="margin-top:16px" id="login-btn">Enter Beamlock</button>
-      <p style="font-size:12px;margin-top:14px">Tip: use a trade role to see <strong>My trade</strong> jobs waiting on you.</p>
+      <div id="signin-panel">
+        <h1>Sign in</h1>
+        <p>Use the name and code on your account. A new account stays pending until a planner or admin approves it.</p>
+        <label class="lbl" for="login-name">Name</label>
+        <input id="login-name" class="input" autocomplete="username" />
+        <label class="lbl" for="login-code">Code</label>
+        <input id="login-code" class="input" type="password" inputmode="numeric" autocomplete="current-password" />
+        <p id="login-error" class="hold-banner hidden"></p>
+        <button class="btn btn-primary btn-block" style="margin-top:16px" id="login-btn" type="button">Sign in</button>
+        <button class="btn btn-block" style="margin-top:8px" id="show-create" type="button">Create account</button>
+      </div>
+      <div id="create-panel" class="hidden">
+        <h1>Create account</h1>
+        <p>Request a role. You will not see jobs until a planner or admin approves it.</p>
+        <label class="lbl" for="create-name">Full name</label>
+        <input id="create-name" class="input" autocomplete="name" />
+        <label class="lbl" for="create-code">Code (6 or more digits)</label>
+        <input id="create-code" class="input" type="password" inputmode="numeric" autocomplete="new-password" />
+        <label class="lbl" for="create-code2">Confirm code</label>
+        <input id="create-code2" class="input" type="password" inputmode="numeric" autocomplete="new-password" />
+        <label class="lbl" for="create-role">Requested role</label>
+        <select id="create-role" class="select"></select>
+        <p id="create-error" class="hold-banner hidden"></p>
+        <button class="btn btn-primary btn-block" style="margin-top:16px" id="create-btn" type="button">Request account</button>
+        <button class="btn btn-block" style="margin-top:8px" id="show-signin" type="button">Back to sign in</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="gate" class="login hidden">
+    <div class="login-card">
+      <div class="brand" style="margin-bottom:12px;color:var(--navy)">
+        <img src="./icons/icon-192.png" alt="Beamlock" />
+        <div>BEAMLOCK<span class="sub" style="color:var(--muted)">Trade sign-off. Real time.</span></div>
+      </div>
+      <h1 id="gate-title">Waiting for approval</h1>
+      <p id="gate-copy">Your account is pending. A planner or admin has to approve your role before you can open jobs.</p>
+      <button class="btn btn-block" id="gate-signout" type="button">Sign out</button>
     </div>
   </div>
 
@@ -47,7 +74,10 @@
         <div class="user-pill" title="Connection status"><span class="live-dot" id="live-dot"></span><span class="live-label" id="live-label">Live</span><span id="user-label"></span></div>
         <button class="btn btn-sm header-btn" id="btn-hc" type="button" title="High contrast" aria-pressed="false">High contrast</button>
         <button class="btn btn-sm header-btn" id="btn-notify" type="button" title="Turn on notifications">Notifications</button>
-        <button class="btn btn-sm header-btn" id="btn-logout" type="button" title="Sign in as someone else">Switch user</button>
+        <label class="header-actas hidden" id="act-as-wrap" title="Operator view">View as
+          <select id="act-as" aria-label="View as"></select>
+        </label>
+        <button class="btn btn-sm header-btn" id="btn-logout" type="button" title="Sign out of this device">Sign out</button>
       </div>
     </header>
     <div id="net-banner" class="net-banner hidden" role="status"></div>
@@ -140,7 +170,13 @@
       </section>
 
       <section id="view-admin" class="hidden">
-        <h2 style="margin-top:0;color:var(--navy)">Admin · integrations</h2>
+        <div id="adm-users-wrap">
+          <h2 style="margin-top:0;color:var(--navy)">Users</h2>
+          <p style="color:var(--muted)">Approve or reject accounts, confirm the role, reset a code, or deactivate. Planners cannot create or change an admin.</p>
+          <div id="adm-users"></div>
+        </div>
+        <div id="adm-settings">
+        <h2 style="margin-top:18px;color:var(--navy)">Admin · integrations</h2>
         <p style="color:var(--muted)">URL templates, app tiles, Power BI embed. Anon key only in the browser — never service_role.</p>
         <div class="admin-grid">
           <div>
@@ -184,6 +220,7 @@
         <h3>App tiles</h3>
         <div id="adm-tiles"></div>
         <button class="btn btn-primary" id="adm-save" style="margin-top:12px">Save integration settings</button>
+        </div>
       </section>
 
       <section id="view-audit" class="hidden">
