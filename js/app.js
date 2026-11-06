@@ -1327,7 +1327,7 @@
     $('#datasource-bar').innerHTML =
       '<span class="pill">Data source: ' + esc(ds.label || 'Supabase') + '</span>' +
       '<span class="pill">Last updated: ' + esc(ds.lastUpdated ? fmtTime(ds.lastUpdated) : '—') + '</span>' +
-      '<span class="pill">Auth: demo</span>' +
+      '<span class="pill">Auth: ' + (state.demoOn ? 'demo' : (state.user ? 'signed in' : 'signed out')) + '</span>' +
       '<span class="pill">Region: ' + esc(cfg.region) + '</span>';
   }
   function readAppDraft() {
