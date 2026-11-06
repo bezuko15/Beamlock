@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="description" content="Beamlock — Trade sign-off. Real time." />
   <!-- Static-host CSP / COOP (GitHub Pages / Surge cannot set all response headers) -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://*.supabase.co; script-src 'self' 'unsafe-inline' https://*.supabase.co https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://*.supabase.co; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co; frame-src 'self' https://app.powerbi.com https://*.powerbi.com https://login.microsoftonline.com; child-src 'self' https://app.powerbi.com https://*.powerbi.com https://login.microsoftonline.com; font-src 'self' data:; object-src 'none'; base-uri 'self' https://*.supabase.co; manifest-src 'self' https://*.supabase.co" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://*.supabase.co; script-src 'self' 'unsafe-inline' https://*.supabase.co https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://*.supabase.co; img-src 'self' data: blob: https:; media-src 'self' blob: https://*.supabase.co; connect-src 'self' https://*.supabase.co wss://*.supabase.co; frame-src 'self' https://app.powerbi.com https://*.powerbi.com https://login.microsoftonline.com; child-src 'self' https://app.powerbi.com https://*.powerbi.com https://login.microsoftonline.com; font-src 'self' data:; object-src 'none'; base-uri 'self' https://*.supabase.co; manifest-src 'self' https://*.supabase.co" />
   <meta http-equiv="Cross-Origin-Opener-Policy" content="same-origin-allow-popups" />
   <link rel="manifest" href="./manifest.json" />
   <link rel="icon" href="./icons/favicon.png" />
@@ -89,6 +89,8 @@
         <button class="tab" data-view="history">My jobs</button>
         <button class="tab" data-view="board">Live board</button>
         <button class="tab hidden" id="tab-dash" data-view="dash">Dashboard</button>
+        <button class="tab hidden" id="tab-turn" data-view="turn">Turnaround</button>
+        <button class="tab" data-view="safety">Safety</button>
         <button class="tab" data-view="planner" id="tab-planner">Planner</button>
         <button class="tab" data-view="apps">Apps</button>
         <button class="tab" data-view="dashboards">Dashboards</button>
@@ -242,6 +244,23 @@
         <div id="dash-body"></div>
       </section>
 
+      <section id="view-turn" class="hidden">
+        <div class="dash-head">
+          <h2 style="margin:0">Turnaround</h2>
+          <button type="button" class="btn" id="btn-turn-export">Export Excel</button>
+          <button type="button" class="btn" id="btn-turn-csv">Export CSV</button>
+        </div>
+        <div id="turn-body"></div>
+      </section>
+
+      <section id="view-safety" class="hidden">
+        <h2 style="margin-top:0">Unit safety</h2>
+        <p class="safety-precedence">Site emergency procedures and the official muster system take precedence over anything shown here.</p>
+        <label class="lbl" for="safety-unit">Unit</label>
+        <select id="safety-unit" class="select"></select>
+        <div id="safety-body"></div>
+      </section>
+
       <section id="view-security" class="hidden security-page">
         <h2>Security and privacy</h2>
         <p>Beamlock tracks work progress. It does not issue permits, approve permits, or authorize isolations or LOTO.</p>
@@ -252,7 +271,7 @@
         <h3>Audit and lockout</h3>
         <p>Sign-offs, holds, comments, and account changes are written to the audit log. The database stamps the name from the signed-in account. Five wrong codes lock that account for 15 minutes.</p>
         <h3>Photos and alerts</h3>
-        <p>Comment photos sit in a private storage bucket and open with a short-lived link while you are signed in. Alerts use this device's notification permission while Beamlock is open, and only if you turn them on under Profile. Background web push is not turned on. On iPhone, notifications need the app installed to the Home Screen and only appear while it is open.</p>
+        <p>Comment photos and voice notes sit in a private storage bucket and open with a short-lived link while you are signed in. Alerts use this device's notification permission while Beamlock is open, and only if you turn them on under Profile. Background web push is not turned on. On iPhone, notifications need the app installed to the Home Screen and only appear while it is open.</p>
         <p>Beamlock does not claim SOC 2, ISO 27001, or a permit-system accreditation. A printable copy is in <code>docs/SECURITY.md</code>.</p>
         <button type="button" class="btn" id="btn-print-security">Print this page</button>
       </section>

@@ -279,6 +279,16 @@ label.lbl { display: block; font-size: 12px; font-weight: 700; color: var(--mute
 .hidden { display: none !important; }
 .hold-banner { background: #fde8e6; color: var(--red); padding: 10px 12px; border-radius: 10px; font-weight: 700; margin-bottom: 12px; }
 .footer-note { text-align: center; color: var(--muted); font-size: 12px; padding: 24px 8px 40px; }
+.btn-safety { background: #b42318; color: #fff; border: none; min-height: 56px; font-size: 18px; font-weight: 800; margin-top: 8px; }
+html.hc .btn-safety { background: #ffcc00; color: #000; border: 2px solid #000; }
+.voice-hold { touch-action: none; user-select: none; }
+.voice-hold.recording { background: #b42318; color: #fff; border-color: #b42318; }
+.voice-hint { font-size: 12px; color: var(--muted); margin: 4px 0; }
+.safety-card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 16px; display: grid; gap: 12px; }
+.safety-card h3 { margin: 0; }
+.safety-precedence { background: #fff7ed; border: 1px solid var(--amber); border-radius: 12px; padding: 10px 12px; font-weight: 700; }
+.placeholder { color: var(--muted); font-style: italic; }
+.burn { width: 100%; height: 160px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
 .demo-banner { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; background: #1a2332; color: #fff; border: 2px solid var(--amber); border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; font-weight: 700; }
 .demo-banner .btn { background: #fff; color: #1a2332; }
 .dash-grid { display: grid; gap: 12px; }

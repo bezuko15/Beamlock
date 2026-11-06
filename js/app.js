@@ -356,6 +356,9 @@
       .on('postgres_changes', { event: '*', schema: 'public', table: 'comments' }, () => refreshLive())
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_settings' }, () => loadMeta().then(renderDataSource))
       .on('postgres_changes', { event: '*', schema: 'public', table: 'app_tiles' }, () => loadMeta().then(() => { if (state.view === 'apps') renderApps(); }))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'turnarounds' }, () => { if (state.view === 'turn') renderTurnaround(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'turnaround_jobs' }, () => { if (state.view === 'turn') renderTurnaround(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'unit_safety' }, () => loadSafety().then(() => { if (state.view === 'safety') renderSafety(); }))
       .subscribe((status) => {
         if (!navigator.onLine) setLiveStatus('offline');
         else setLiveStatus(status === 'SUBSCRIBED' ? 'live' : 'reconnecting');
@@ -549,18 +552,17 @@
     $('#tab-admin').style.display = canManageUsers() ? '' : 'none';
     const seeDash = isApproved() && ['Supervisor', 'Planner', 'Admin'].includes(state.user?.role);
     $('#tab-dash')?.classList.toggle('hidden', !seeDash);
+    $('#tab-turn')?.classList.toggle('hidden', !seeDash);
     $('#btn-demo')?.classList.toggle('hidden', !isRealAdmin());
     $('#adm-settings')?.classList.toggle('hidden', !isRealAdmin());
     $('#act-as-wrap')?.classList.toggle('hidden', state.profile?.role !== 'Operator');
     if (!canPlan() && state.view === 'planner') setView('jobs');
     if (!canManageUsers() && state.view === 'admin') setView('jobs');
+    if (!seeDash && (state.view === 'dash' || state.view === 'turn')) setView('jobs');
   }
   async function fillActAs() {
     const sel = $('#act-as');
     if (!sel || state.profile?.role !== 'Operator') return;
-    const roles = await loadSignupRoles();
-    const current = state.profile.acting_as || '';
-    sel.innerHTML = '<option value="">Operator</option>' + roles.filter((r) => r.id !== 'Admin').map((r) => '<option value="' + esc(r.id) + '"' + (current === r.id ? ' selected' : '') + '>' + esc(r.label) + '</option>').join('');
     sel.onchange = async () => {
       const { error } = await sb.rpc('set_acting_as', { next_role: sel.value });
       if (error) return toast(error.message);
@@ -571,6 +573,9 @@
       paintIdentity();
       renderAll();
     };
+    const roles = await loadSignupRoles();
+    const current = state.profile.acting_as || '';
+    sel.innerHTML = '<option value="">Operator</option>' + roles.filter((r) => r.id !== 'Admin').map((r) => '<option value="' + esc(r.id) + '"' + (current === r.id ? ' selected' : '') + '>' + esc(r.label) + '</option>').join('');
   }
 
   async function enterApp() {
@@ -582,6 +587,7 @@
     restoreFilters();
     syncFilterControls();
     renderDataSource();
+    loadSafety().then(() => { if (state.view === 'safety') renderSafety(); }).catch(() => {});
     if (state.channels.main) { try { sb.removeChannel(state.channels.main); } catch (_) {} }
     subscribeRealtime();
     refreshAll(true);
@@ -715,6 +721,7 @@
       (quiet.length ? '<div class="meta quiet">' + quiet.map((t) => '<span class="chip">' + esc(t) + '</span>').join('') + '</div>' : '') +
       '<div class="steps-mini">' + steps + '</div>' +
       (job.on_hold ? '<div style="margin-top:8px;color:var(--red);font-size:13px;font-weight:700">' + esc(job.hold_reason || '') + '</div>' : '') +
+      '<button type="button" class="btn btn-safety btn-block" data-card-safety="' + esc(job.unit || '') + '">Safety' + (job.unit ? ' · ' + esc(job.unit) : '') + '</button>' +
       '</article>';
   }
 
@@ -992,13 +999,15 @@
     if (state.view === 'audit') renderAudit();
     if (state.view === 'apps') renderApps();
     if (state.view === 'dash') renderDash();
+    if (state.view === 'turn') renderTurnaround();
+    if (state.view === 'safety') renderSafety();
     if (state.view === 'dashboards') renderDashboards();
     if (state.view === 'admin') renderAdmin();
   }
   function setView(name) {
     state.view = name;
     $$('#main-tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.view === name));
-    ['jobs', 'mine', 'history', 'board', 'dash', 'planner', 'apps', 'dashboards', 'admin', 'audit', 'security'].forEach((v) => {
+    ['jobs', 'mine', 'history', 'board', 'dash', 'turn', 'safety', 'planner', 'apps', 'dashboards', 'admin', 'audit', 'security'].forEach((v) => {
       $('#view-' + v).classList.toggle('hidden', v !== name);
     });
     renderAll();
@@ -1137,7 +1146,7 @@
     if (only) comments = [only];
     else if (notesMode === 'today') comments = comments.filter((c) => edmontonParts(c.created_at)?.dayKey === now.dayKey);
     comments.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
-    const noteLine = (c) => '- ' + fmtEdmonton(c.created_at) + ' — ' + (c.author_name || '—') + ' — ' + (c.author_role || '—') + ' — ' + (c.body || '');
+    const noteLine = (c) => '- ' + fmtEdmonton(c.created_at) + ' — ' + (c.author_name || '—') + ' — ' + (c.author_role || '—') + ' — ' + (c.body || '') + (c.audio_path ? ' — voice note attached' : '');
     lines.push('', only ? 'Note:' : (notesMode === 'today' ? "Today's notes:" : 'Notes:'));
     if (!comments.length) lines.push('- ' + (notesMode === 'today' && !only ? 'none today' : 'none'));
     else if (only) lines.push(noteLine(comments[0]));
@@ -1248,6 +1257,7 @@
       '<span class="chip">P&ID: ' + esc(job.pid_number || '—') + '</span>' +
       (wait ? '<span class="chip hot">Next: ' + esc(wait.label) + '</span>' : '') + '</div>' +
       '<div class="launch-row">' + launchHtml + '</div>' +
+      '<button type="button" class="btn btn-safety btn-block" data-open-safety="' + esc(job.unit || '') + '">Safety' + (job.unit ? ' · ' + esc(job.unit) : '') + '</button>' +
       '<div class="utl-row"><span class="utl-label">Copy to UTL log</span>' +
       '<button type="button" class="btn btn-sm btn-primary" data-utl="today">Today\'s notes only</button>' +
       '<button type="button" class="btn btn-sm" data-utl="all">All notes</button>' + utlOpen + '</div>' +
@@ -1294,6 +1304,11 @@
     $('#close-modal').onclick = () => { root.innerHTML = ''; };
     $('#job-overlay').onclick = (e) => { if (e.target.id === 'job-overlay') root.innerHTML = ''; };
 
+    root.querySelector('[data-open-safety]')?.addEventListener('click', () => {
+      state.safetyUnit = root.querySelector('[data-open-safety]').dataset.openSafety || '';
+      setView('safety');
+      root.innerHTML = '';
+    });
     root.querySelector('[data-act="hold"]')?.addEventListener('click', async () => {
       const reason = prompt('Hold reason (permit, scaffold, parts, isolation…)'); if (!reason) return;
       await sb.from('jobs').update({ on_hold: true, hold_reason: reason, hold_by: state.user.name, hold_at: new Date().toISOString(), status: 'on_hold', updated_at: new Date().toISOString() }).eq('id', job.id);
@@ -1442,7 +1457,7 @@
       await reloadJob();
       toast('Job reopened');
     });
-    $$('form.comment-form', root).forEach((form) => {
+    $$('form.comment-form', root).forEach((form) => { wireVoice(form);
       form.onsubmit = async (e) => {
         e.preventDefault();
         const body = (form.body?.value || '').trim();
@@ -1450,7 +1465,7 @@
         if (state.demoOn) {
           if (!body && !files.length) return toast('Comment required');
           job.comments = job.comments || [];
-          job.comments.push({ id: 'demo-c-' + Date.now(), author_name: state.user.name, author_role: state.user.role, body: body || '(photo)', created_at: new Date().toISOString(), channel: form.dataset.step ? 'step' : 'general', section: form.dataset.section || null, step_id: form.dataset.step || null });
+          job.comments.push({ id: 'demo-c-' + Date.now(), author_name: state.user.name, author_role: state.user.role, body: body || (form._voiceBlob ? '(voice note)' : '(photo)'), created_at: new Date().toISOString(), channel: form.dataset.step ? 'step' : 'general', section: form.dataset.section || null, step_id: form.dataset.step || null, audio_path: form._voiceBlob ? URL.createObjectURL(form._voiceBlob) : '' });
           showJobModal(job);
           toast('DEMO comment — not saved to the plant');
           return;
@@ -1458,7 +1473,8 @@
         if (!navigator.onLine) {
           const buffers = [];
           for (const file of files) buffers.push(await file.arrayBuffer());
-          await queueOffline({ id: 'q-' + Date.now(), kind: 'comment', at: Date.now(), jobId: job.id, stepId: form.dataset.step || null, section: form.dataset.section || null, body: body || '(photo)', name: state.user.name, role: state.user.role, photos: buffers });
+          const audioBuf = form._voiceBlob ? await form._voiceBlob.arrayBuffer() : null;
+          await queueOffline({ id: 'q-' + Date.now(), kind: 'comment', at: Date.now(), jobId: job.id, stepId: form.dataset.step || null, section: form.dataset.section || null, body: body || (form._voiceBlob ? '(voice note)' : '(photo)'), name: state.user.name, role: state.user.role, photos: buffers, audio: audioBuf, audioType: form._voiceBlob?.type || '' });
           toast('Comment saved on this device. It will send when you are back online.');
           return;
         }
@@ -1467,13 +1483,18 @@
           try { photos = await uploadPhotos(job.id, files); }
           catch (err) { return toast('Photo upload failed: ' + err.message); }
         }
-        if (!body && !photos.length) return toast('Comment required');
+        let audioPath = null;
+        if (form._voiceBlob) {
+          try { audioPath = await uploadAudio(job.id, form._voiceBlob); }
+          catch (err) { return toast('Voice note upload failed: ' + err.message); }
+        }
+        if (!body && !photos.length && !audioPath) return toast('Comment required');
         const stepId = form.dataset.step || null;
         const section = stepId ? null : (form.dataset.section || 'general');
         const { error } = await sb.from('comments').insert({
           job_id: job.id, author_name: state.user.name, author_role: state.user.role,
           channel: stepId ? 'step' : section, section, step_id: stepId,
-          body: body || '(photo)', photo_path: photos[0] || null, photo_paths: photos,
+          body: body || (audioPath ? '(voice note)' : '(photo)'), photo_path: photos[0] || null, photo_paths: photos, audio_path: audioPath,
         });
         if (error) return toast(error.message);
         const where = stepId ? ((job.steps.find((s) => s.id === stepId)?.label) || 'step') : section;
@@ -1485,14 +1506,23 @@
     });
   }
 
+  function voiceSpeech() {
+    const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (ios) return null;
+    return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+  }
   function commentCard(c) {
     const photos = commentPhotos(c).map((url) => '<img class="thumb" src="' + esc(url) + '" data-full="' + esc(url) + '" data-raw="' + esc(url) + '" alt="Photo" />').join('');
+    const audio = c.audio_path ? '<audio class="voice-play" controls data-raw="' + esc(c.audio_path) + '"></audio>' : '';
     return '<div class="comment"><div class="who"><span>' + esc(c.author_name) + ' · ' + esc(c.author_role) + ' · ' + fmtTime(c.created_at) + '</span><button type="button" class="btn btn-sm" data-copy-comment="' + esc(c.id) + '">Copy to UTL log</button></div><div>' + esc(c.body) + '</div>' +
-      (photos ? '<div class="comment-photos">' + photos + '</div>' : '') + '</div>';
+      (photos ? '<div class="comment-photos">' + photos + '</div>' : '') + audio + '</div>';
   }
   function commentBox(items, attrs, allowForm) {
+    const Speech = voiceSpeech();
+    const voiceNote = !Speech ? '<p class="voice-hint">This browser can record audio only. It cannot write a transcript. You can still type the note.</p>' : '<p class="voice-hint">Hold the button, speak, then edit the text before you save.</p>';
     const form = allowForm === false ? '' : '<form class="comment-form" ' + attrs + '><label class="lbl">Add comment</label><textarea class="textarea" name="body" placeholder="Add a comment…"></textarea>' +
-      '<div class="row"><input type="file" name="photos" accept="image/*" capture="environment" multiple /><button class="btn btn-primary btn-sm" type="submit">Add comment</button></div></form>';
+      '<div class="row"><button type="button" class="btn btn-sm voice-hold" data-voice>Hold to talk</button><input type="file" name="photos" accept="image/*" capture="environment" multiple /><button class="btn btn-primary btn-sm" type="submit">Add comment</button></div>' +
+      voiceNote + '<audio class="voice-preview hidden" controls></audio></form>';
     return '<div class="comment-thread">' + (items.length ? items.map(commentCard).join('') : '<div class="empty">No comments yet.</div>') + form + '</div>';
   }
   const CREW_FRESH_MS = 15 * 60 * 1000;
@@ -1579,6 +1609,72 @@
       urls.push(signed.data?.signedUrl || path);
     }
     return urls;
+  }
+  async function uploadAudio(jobId, blob) {
+    const raw = blob.type || '';
+    const mp4 = raw.includes('mp4');
+    const ext = mp4 ? 'm4a' : 'webm';
+    const contentType = mp4 ? 'audio/mp4' : 'audio/webm';
+    const path = jobId + '/voice-' + Date.now() + '.' + ext;
+    const { error } = await sb.storage.from('comment-photos').upload(path, blob, { contentType });
+    if (error) throw error;
+    return 'comment-photos/' + path;
+  }
+  function wireVoice(form) {
+    const btn = form.querySelector('[data-voice]');
+    if (!btn || btn.dataset.wired) return;
+    btn.dataset.wired = '1';
+    const hint = form.querySelector('.voice-hint');
+    const ta = form.querySelector('textarea');
+    const Speech = voiceSpeech();
+    const canRec = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+    if (!canRec && !Speech) {
+      btn.disabled = true;
+      if (hint) hint.textContent = 'Voice notes are not available in this browser.';
+      return;
+    }
+    let rec, stream, recognition, chunks;
+    const stop = () => {
+      btn.classList.remove('recording');
+      if (recognition) { try { recognition.stop(); } catch (_) {} recognition = null; }
+      if (rec && rec.state !== 'inactive') rec.stop();
+    };
+    btn.addEventListener('pointerdown', async (e) => {
+      e.preventDefault();
+      if (!canRec) { if (hint) hint.textContent = 'This browser cannot record audio.'; return; }
+      btn.classList.add('recording');
+      chunks = [];
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mime = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : (MediaRecorder.isTypeSupported('audio/mp4') ? 'audio/mp4' : '');
+        rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+        rec.ondataavailable = (ev) => { if (ev.data && ev.data.size) chunks.push(ev.data); };
+        rec.onstop = () => {
+          stream.getTracks().forEach((t) => t.stop());
+          form._voiceBlob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
+          const preview = form.querySelector('audio.voice-preview');
+          if (preview) { preview.src = URL.createObjectURL(form._voiceBlob); preview.classList.remove('hidden'); }
+        };
+        rec.start();
+      } catch (err) {
+        btn.classList.remove('recording');
+        if (hint) hint.textContent = 'Microphone was not allowed.';
+        return;
+      }
+      if (!Speech) return;
+      recognition = new Speech();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.onresult = (ev) => {
+        let text = '';
+        for (let i = 0; i < ev.results.length; i++) text += ev.results[i][0].transcript;
+        if (ta) ta.value = text.trim();
+      };
+      try { recognition.start(); } catch (_) {}
+    });
+    btn.addEventListener('pointerup', stop);
+    btn.addEventListener('pointercancel', stop);
+    btn.addEventListener('pointerleave', (e) => { if (btn.classList.contains('recording') && e.buttons === 0) stop(); });
   }
 
   function resizeImage(file, max) {
@@ -2262,11 +2358,24 @@
       location.href = 'mailto:?subject=' + encodeURIComponent('Beamlock shift handover') + '&body=' + encodeURIComponent(text);
     };
   }
+  function armDemo() {
+    state.demoJobs = window.BLPresent.buildDemoJobs();
+    state.jobs = state.demoJobs;
+    state.demoTurnaround = {
+      id: 'demo-ta',
+      name: 'Spring outage (DEMO)',
+      starts_on: dayKeyOffset(-2),
+      ends_on: dayKeyOffset(12),
+      units: ['HMU', 'RHC', 'A&V', 'SRU', 'COGEN', 'Waterblock'],
+      jobs: state.demoJobs.map((j) => j.id),
+      turnaround_jobs: state.demoJobs.map((j) => ({ job_id: j.id })),
+    };
+    state.turnaroundId = 'demo-ta';
+  }
   function startDemo() {
     if (!isRealAdmin()) return toast('Demo mode is for admins');
     state.demoOn = true;
-    state.demoJobs = window.BLPresent.buildDemoJobs();
-    state.jobs = state.demoJobs;
+    armDemo();
     $('#demo-banner')?.classList.remove('hidden');
     renderAll();
     toast('Demo orders loaded. Real jobs were not changed.');
@@ -2281,8 +2390,7 @@
   function resetDemo() {
     if (!state.demoOn) return;
     if (state.demoTimer) { clearInterval(state.demoTimer); state.demoTimer = null; }
-    state.demoJobs = window.BLPresent.buildDemoJobs();
-    state.jobs = state.demoJobs;
+    armDemo();
     renderAll();
     toast('Demo orders reset.');
   }
@@ -2419,9 +2527,14 @@
             const signed = await sb.storage.from('comment-photos').createSignedUrl(path, 60 * 60 * 24 * 7);
             photoUrl = signed.data?.signedUrl || null;
           }
+          let audioPath = null;
+          if (item.audio) {
+            try { audioPath = await uploadAudio(item.jobId, new Blob([item.audio], { type: item.audioType || 'audio/webm' })); }
+            catch (_) { break; }
+          }
           const ins = await sb.from('comments').insert({
             job_id: item.jobId, step_id: item.stepId, section: item.section, channel: item.stepId ? 'step' : (item.section || 'general'),
-            body: item.body || '(photo)', author_name: item.name, author_role: item.role, photo_path: photoUrl, photo_paths: photoUrl ? [photoUrl] : [],
+            body: item.body || (audioPath ? '(voice note)' : '(photo)'), author_name: item.name, author_role: item.role, photo_path: photoUrl, photo_paths: photoUrl ? [photoUrl] : [], audio_path: audioPath,
           });
           if (ins.error) break;
         }
@@ -2445,10 +2558,186 @@
     return !error && data?.signedUrl ? data.signedUrl : url;
   }
   function resolveThumbs(root) {
-    root.querySelectorAll('img.thumb[data-raw]').forEach(async (img) => {
-      const next = await signedPhotoUrl(img.dataset.raw);
-      if (next) { img.src = next; img.dataset.full = next; }
+    root.querySelectorAll('[data-raw]').forEach(async (el) => {
+      const next = await signedPhotoUrl(el.dataset.raw);
+      if (!next) return;
+      if (el.tagName === 'AUDIO') el.src = next;
+      else { el.src = next; el.dataset.full = next; }
     });
+  }
+  const SAFETY_UNITS = ['RHC', 'HMU', 'A&V', 'SRU', 'COGEN', 'Waterblock'];
+  async function loadSafety() {
+    if (!navigator.onLine) {
+      try { state.safety = JSON.parse(localStorage.getItem('bl_safety') || '[]'); } catch { state.safety = []; }
+      return;
+    }
+    const { data, error } = await sb.from('unit_safety').select('*');
+    if (error) return;
+    state.safety = data || [];
+    localStorage.setItem('bl_safety', JSON.stringify(state.safety));
+  }
+  function safetyFor(unit) {
+    return (state.safety || []).find((s) => s.unit === unit) || null;
+  }
+  function renderSafety() {
+    const sel = $('#safety-unit');
+    const host = $('#safety-body');
+    if (!sel || !host) return;
+    const current = state.safetyUnit || sel.value || 'A&V';
+    sel.innerHTML = SAFETY_UNITS.map((u) => '<option' + (u === current ? ' selected' : '') + '>' + esc(u) + '</option>').join('');
+    sel.value = SAFETY_UNITS.includes(current) ? current : 'A&V';
+    sel.onchange = () => { state.safetyUnit = sel.value; renderSafety(); };
+    const unit = sel.value;
+    const row = safetyFor(unit);
+    const phones = Array.isArray(row?.phones) ? row.phones : [];
+    const showers = Array.isArray(row?.showers) ? row.showers : [];
+    const blank = '<span class="placeholder">Not set yet, admin can add</span>';
+    host.innerHTML = '<article class="safety-card"><h3>' + esc(unit) + '</h3>' +
+      '<div><strong>Unit muster point</strong><div>' + (row?.muster_unit ? esc(row.muster_unit) : blank) + '</div></div>' +
+      '<div><strong>Site muster point</strong><div>' + (row?.muster_site ? esc(row.muster_site) : blank) + '</div></div>' +
+      '<div><strong>Unit phones</strong>' + (phones.length ? phones.map((p) => '<div><a href="tel:' + esc(String(p.number || '').replace(/[^\d+]/g, '')) + '">' + esc(p.name || 'Phone') + ' · ' + esc(p.number || '') + '</a></div>').join('') : '<div>' + blank + '</div>') + '</div>' +
+      '<div><strong>Safety showers and eyewash</strong>' + (showers.length ? showers.map((s) => '<div>' + esc(s.id || 'Shower') + ' — ' + esc(s.location || '') + '</div>').join('') : '<div>' + blank + '</div>') + '</div>' +
+      '<div><strong>Notes</strong><div>' + (row?.notes ? esc(row.notes) : blank) + '</div></div>' +
+      (row?.map_path ? '<img class="thumb" alt="Map" data-raw="' + esc(row.map_path) + '" src="" />' : '<div><strong>Map photo</strong><div>' + blank + '</div></div>') +
+      '</article>' +
+      (isRealAdmin() ? '<form id="safety-form" class="tile-edit" style="margin-top:12px"><h3>Edit ' + esc(unit) + '</h3>' +
+        '<label class="lbl">Unit muster point</label><input class="input" name="muster_unit" value="' + esc(row?.muster_unit || '') + '" />' +
+        '<label class="lbl">Site muster point</label><input class="input" name="muster_site" value="' + esc(row?.muster_site || '') + '" />' +
+        '<label class="lbl">Phones, one per line: name | number</label><textarea class="textarea" name="phones">' + esc(phones.map((p) => (p.name || '') + ' | ' + (p.number || '')).join('\n')) + '</textarea>' +
+        '<label class="lbl">Showers, one per line: ID | location</label><textarea class="textarea" name="showers">' + esc(showers.map((s) => (s.id || '') + ' | ' + (s.location || '')).join('\n')) + '</textarea>' +
+        '<label class="lbl">Notes</label><textarea class="textarea" name="notes">' + esc(row?.notes || '') + '</textarea>' +
+        '<label class="lbl">Map photo</label><input type="file" name="map" accept="image/*" />' +
+        '<button class="btn btn-primary" type="submit">Save safety info</button></form>' : '');
+    resolveThumbs(host);
+    const form = $('#safety-form');
+    if (form) form.onsubmit = async (e) => {
+      e.preventDefault();
+      const lines = (name) => String(form[name].value || '').split('\n').map((line) => line.trim()).filter(Boolean);
+      const phonesNext = lines('phones').map((line) => { const [name, number] = line.split('|'); return { name: (name || '').trim(), number: (number || '').trim() }; });
+      const showersNext = lines('showers').map((line) => { const [id, location] = line.split('|'); return { id: (id || '').trim(), location: (location || '').trim() }; });
+      let mapPath = row?.map_path || '';
+      const file = form.map.files?.[0];
+      if (file) {
+        const blob = await resizeImage(file, 1280);
+        const path = 'safety/' + unit + '-' + Date.now() + '.jpg';
+        const up = await sb.storage.from('comment-photos').upload(path, blob, { contentType: 'image/jpeg' });
+        if (up.error) return toast(up.error.message);
+        mapPath = 'comment-photos/' + path;
+      }
+      const payload = { unit, muster_unit: form.muster_unit.value.trim(), muster_site: form.muster_site.value.trim(), phones: phonesNext, showers: showersNext, notes: form.notes.value.trim(), map_path: mapPath, updated_at: new Date().toISOString(), updated_by: state.user.name };
+      const { error } = await sb.from('unit_safety').upsert(payload);
+      if (error) return toast(error.message);
+      await loadSafety();
+      renderSafety();
+      toast('Safety info saved');
+    };
+  }
+  function plannedHours(job) {
+    const nums = (job.steps || []).map((s) => parseFloat(s.beam?.originalDuration || s.beam?.remDuration)).filter((n) => !Number.isNaN(n) && n > 0);
+    return nums.reduce((a, b) => a + b, 0);
+  }
+  function turnaroundJobs(event) {
+    const ids = new Set((event.turnaround_jobs || []).map((r) => r.job_id).concat(event.jobs || []));
+    return activeList().filter((j) => ids.has(j.id));
+  }
+  function burnSvg(event, jobs) {
+    const start = event.starts_on ? new Date(event.starts_on + 'T00:00:00') : new Date();
+    const end = event.ends_on ? new Date(event.ends_on + 'T00:00:00') : new Date(start.getTime() + 14 * 86400000);
+    const days = Math.max(1, Math.round((end - start) / 86400000));
+    const total = Math.max(jobs.length, 1);
+    const ptsP = [];
+    const ptsA = [];
+    for (let i = 0; i <= days; i++) {
+      const day = new Date(start.getTime() + i * 86400000);
+      const plannedLeft = total * (1 - i / days);
+      const done = jobs.filter((j) => j.completed_at && new Date(j.completed_at) <= day).length;
+      const x = 20 + (i / days) * 280;
+      ptsP.push(x + ',' + (140 - (plannedLeft / total) * 110));
+      ptsA.push(x + ',' + (140 - ((total - done) / total) * 110));
+    }
+    return '<svg class="burn" viewBox="0 0 320 160" role="img" aria-label="Daily burn-down"><text x="8" y="16" font-size="12">Remaining jobs</text><polyline fill="none" stroke="#8a4f15" stroke-width="2" points="' + ptsP.join(' ') + '" /><polyline fill="none" stroke="#1f7a4c" stroke-width="2" points="' + ptsA.join(' ') + '" /><text x="8" y="156" font-size="11">Brown plan · green actual</text></svg>';
+  }
+  async function loadTurnarounds() {
+    if (state.demoOn) {
+      state.turnarounds = state.demoTurnaround ? [state.demoTurnaround] : [];
+      return;
+    }
+    const { data } = await sb.from('turnarounds').select('*, turnaround_jobs(job_id)');
+    state.turnarounds = data || [];
+  }
+  async function renderTurnaround() {
+    const host = $('#turn-body');
+    if (!host || !canSeeDash()) { if (host) host.innerHTML = '<div class="empty">Turnaround is for supervisors, planners, and admins.</div>'; return; }
+    await loadTurnarounds();
+    const current = (state.turnarounds || []).find((t) => t.id === state.turnaroundId) || state.turnarounds[0];
+    state.turnaroundId = current?.id || '';
+    const jobs = current ? turnaroundJobs(current) : [];
+    const pct = jobs.length ? Math.round(jobs.filter((j) => j.status === 'done').length / jobs.length * 100) : 0;
+    const by = (keyFn) => {
+      const map = {};
+      for (const job of jobs) {
+        const key = keyFn(job) || '—';
+        map[key] = map[key] || { n: 0, done: 0 };
+        map[key].n++;
+        if (job.status === 'done') map[key].done++;
+      }
+      return Object.entries(map).map(([k, v]) => '<div class="bar-row"><span>' + esc(k) + '</span><div class="bar"><span style="width:' + (v.n ? Math.round(v.done / v.n * 100) : 0) + '%"></span></div><strong>' + (v.n ? Math.round(v.done / v.n * 100) : 0) + '%</strong></div>').join('');
+    };
+    const critical = jobs.filter((j) => j.status !== 'done' && (j.priority === 'Critical' || dueBucket(j) === 'overdue'));
+    const planVs = jobs.map((j) => {
+      const planned = plannedHours(j);
+      const actual = j.completed_at && j.created_at ? Math.max(0, Math.round((new Date(j.completed_at) - new Date(j.created_at)) / 36e5)) : null;
+      return '<tr><td>' + esc(j.wo_number) + '</td><td>' + esc(j.unit || '') + '</td><td>' + (planned || '—') + '</td><td>' + (actual == null ? 'Not finished' : actual + ' h') + '</td><td>' + esc(j.status) + '</td></tr>';
+    }).join('');
+    const editor = canPlan() && !state.demoOn ? '<form id="turn-new" class="tile-edit"><h3>New turnaround</h3><input class="input" name="name" placeholder="Name" /><div class="filters"><input class="input" type="date" name="starts_on" /><input class="input" type="date" name="ends_on" /></div><label class="lbl">Units</label><div>' + SAFETY_UNITS.map((u) => '<label style="margin-right:10px"><input type="checkbox" name="unit" value="' + esc(u) + '" /> ' + esc(u) + '</label>').join('') + '</div><button class="btn btn-primary" type="submit">Create</button></form>' +
+      (current ? '<div class="tile-edit"><h3>Assign jobs</h3><p>Add every job in this turnaround’s units, the jobs matching the Jobs tab filters, or a list of order numbers.</p><button type="button" class="btn" id="turn-bulk">Add jobs in the turnaround units</button> <button type="button" class="btn" id="turn-filter">Add jobs matching Jobs filters</button><label class="lbl">Order numbers, one per line</label><textarea class="textarea" id="turn-orders" placeholder="4500123456"></textarea><button type="button" class="btn" id="turn-import">Add these orders</button></div>' : '') : (state.demoOn ? '<p class="placeholder">Demo turnaround. Reset demo to restore it. Nothing is saved to the plant.</p>' : '');
+    host.innerHTML = '<div class="stats"><div class="stat"><div class="n">' + pct + '%</div><div class="l">Complete</div></div><div class="stat hold"><div class="n">' + critical.length + '</div><div class="l">Critical or overdue</div></div><div class="stat"><div class="n">' + jobs.length + '</div><div class="l">Jobs</div></div></div>' +
+      (state.turnarounds.length ? '<label class="lbl">Event</label><select id="turn-pick" class="select">' + state.turnarounds.map((t) => '<option value="' + esc(t.id) + '"' + (t.id === state.turnaroundId ? ' selected' : '') + '>' + esc(t.name) + '</option>').join('') + '</select>' : '<p>No turnaround yet.</p>') +
+      (current ? '<p>' + esc(current.starts_on || '—') + ' → ' + esc(current.ends_on || '—') + ' · ' + esc((current.units || []).join(', ')) + '</p>' + burnSvg(current, jobs) + '<h3>By unit</h3>' + by((j) => j.unit) + '<h3>By process unit</h3>' + by((j) => puForUnit(j.unit).pu) + '<h3>By trade waiting</h3>' + by((j) => { const w = waitingTrade(j); return w ? tradeLabel(w.trade) : (j.status === 'done' ? 'Done' : '—'); }) + '<h3>Plan vs actual</h3><div class="table-wrap"><table><thead><tr><th>Order</th><th>Unit</th><th>Planned h</th><th>Actual</th><th>Status</th></tr></thead><tbody>' + planVs + '</tbody></table></div><h3>Critical / overdue</h3>' + (critical.map((j) => '<div>' + esc(j.wo_number) + ' · ' + esc(j.title) + ' · ' + esc(j.priority) + '</div>').join('') || '<p>None.</p>') : '') + editor;
+    $('#turn-pick') && ($('#turn-pick').onchange = (e) => { state.turnaroundId = e.target.value; renderTurnaround(); });
+    const form = $('#turn-new');
+    if (form) form.onsubmit = async (e) => {
+      e.preventDefault();
+      const units = [...form.querySelectorAll('input[name=unit]:checked')].map((el) => el.value);
+      const { data, error } = await sb.from('turnarounds').insert({ name: form.name.value.trim() || 'Turnaround', starts_on: form.starts_on.value || null, ends_on: form.ends_on.value || null, units, created_by: state.user.name }).select().single();
+      if (error) return toast(error.message);
+      const ids = activeList().filter((j) => !units.length || units.includes(normalizeUnit(j.unit))).map((j) => j.id);
+      if (ids.length) await sb.from('turnaround_jobs').insert(ids.map((id) => ({ turnaround_id: data.id, job_id: id })));
+      state.turnaroundId = data.id;
+      toast('Turnaround created');
+      renderTurnaround();
+    };
+    const addJobs = async (ids) => {
+      if (!current || state.demoOn) return;
+      const have = new Set((current.turnaround_jobs || []).map((r) => r.job_id));
+      const add = [...new Set(ids)].filter((id) => id && !have.has(id)).map((id) => ({ turnaround_id: current.id, job_id: id }));
+      if (!add.length) return toast('Those jobs are already in the turnaround');
+      const { error } = await sb.from('turnaround_jobs').insert(add);
+      if (error) return toast(error.message);
+      toast('Jobs added');
+      renderTurnaround();
+    };
+    $('#turn-bulk') && ($('#turn-bulk').onclick = () => {
+      const units = current?.units || [];
+      addJobs(activeList().filter((j) => !units.length || units.includes(normalizeUnit(j.unit))).map((j) => j.id));
+    });
+    $('#turn-filter') && ($('#turn-filter').onclick = () => addJobs(filteredJobs().map((j) => j.id)));
+    $('#turn-import') && ($('#turn-import').onclick = () => {
+      const wanted = new Set(String($('#turn-orders')?.value || '').split(/\s+/).map((s) => s.trim().toLowerCase()).filter(Boolean));
+      addJobs(activeList().filter((j) => wanted.has(String(j.wo_number || '').trim().toLowerCase())).map((j) => j.id));
+    });
+  }
+  function exportTurnaround(kind) {
+    const current = (state.turnarounds || []).find((t) => t.id === state.turnaroundId) || (state.turnarounds || [])[0];
+    if (!current) return toast('No turnaround to export');
+    const rows = turnaroundJobs(current).map((j) => ({
+      Event: current.name, Order: j.wo_number, Title: j.title, Unit: j.unit, PU: puForUnit(j.unit).pu, Priority: j.priority, Status: j.status,
+      'Planned hours': plannedHours(j) || '', 'Completed at': j.completed_at || '', Overdue: dueBucket(j) === 'overdue' ? 'Yes' : 'No',
+    }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Turnaround');
+    if (kind === 'csv') XLSX.writeFile(wb, 'turnaround.csv', { bookType: 'csv' });
+    else XLSX.writeFile(wb, 'turnaround.xlsx');
   }
 
   function bind() {
@@ -2506,6 +2795,8 @@
     $('#demo-play') && ($('#demo-play').onclick = toggleDemoPlay);
     $('#btn-profile') && ($('#btn-profile').onclick = openProfile);
     $('#btn-handover') && ($('#btn-handover').onclick = openHandover);
+    $('#btn-turn-export') && ($('#btn-turn-export').onclick = () => exportTurnaround('xlsx'));
+    $('#btn-turn-csv') && ($('#btn-turn-csv').onclick = () => exportTurnaround('csv'));
     $('#btn-print-security') && ($('#btn-print-security').onclick = () => window.print());
     refreshSyncCount();
     const applyHc = (on) => {
@@ -2604,7 +2895,12 @@
         await loadMeta(); renderAdmin(); renderApps(); renderDashboards(); renderTradeFilter(); toast('Integration settings saved');
       } catch (e) { toast(e.message); }
     };
-    document.addEventListener('click', (e) => { const card = e.target.closest('.job-card'); if (card && !e.target.closest('button')) openJob(card.dataset.id); });
+    document.addEventListener('click', (e) => {
+      const safety = e.target.closest('[data-card-safety]');
+      if (safety) { state.safetyUnit = safety.dataset.cardSafety || ''; setView('safety'); return; }
+      const card = e.target.closest('.job-card');
+      if (card && !e.target.closest('button')) openJob(card.dataset.id);
+    });
   }
 
   bind();

@@ -29,7 +29,7 @@ Sign-offs, holds, comments, imports, and role changes write an audit row. The da
 
 ## Photos
 
-Comment photos are stored in a private Storage bucket. The browser loads them with short-lived signed links for a signed-in user. They are not a public gallery.
+Comment photos and voice notes are stored in a private Storage bucket. The browser loads them with short-lived signed links for a signed-in user. They are not a public gallery. A voice note can also be typed or edited before it is saved. On a browser that cannot transcribe speech, the audio is saved without a transcript.
 
 ## Notifications
 
