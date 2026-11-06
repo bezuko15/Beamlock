@@ -559,33 +559,70 @@ html[data-density="compact"] .select,
 html[data-density="compact"] .wx-chip { min-height: var(--tap); }
 html.dark:not(.hc) {
   color-scheme: dark;
-  --bg: #10161e;
-  --bg2: #182230;
-  --panel: #1c2836;
-  --panel2: #243244;
-  --border: #3d5168;
+  --bg: #121a26;
+  --bg2: #182433;
+  --panel: #1c2940;
+  --panel2: #24344c;
+  --border: #3c516b;
   --text: #e7eef6;
-  --muted: #b7c5d6;
-  --ink: #f4f7fb;
-  --brand: #8fb4d6;
-  --on-brand: #102033;
-  --shadow: 0 8px 28px rgba(0,0,0,.35);
-  --green: #3dd68c;
-  --red: #ff8d84;
-  --amber-dim: #f0b56a;
+  --muted: #b7c6d6;
+  --ink: #f3f7fb;
+  --navy: #d5e4f2;
+  --steel: #9eb6ce;
+  --brand: #1a2738;
+  --on-brand: #e7eef6;
+  --amber: #e09a45;
+  --amber-dim: #f0c48a;
+  --green: #8fd4ae;
+  --red: #f0b0aa;
+  --shadow: 0 10px 28px rgba(0,0,0,.35);
 }
-html.dark:not(.hc) .app-header { background: #0d1520; }
-html.dark:not(.hc) .safety-banner { background: #3a2a14; color: #ffd7a8; }
-html.dark:not(.hc) .chip.hot,
-html.dark:not(.hc) .wx-advisory { background: #3a2a14; color: #ffd7a8; }
-html.dark:not(.hc) .chip.ok,
-html.dark:not(.hc) .complete-banner { background: #143226; color: #b6f3d0; }
-html.dark:not(.hc) .chip.bad,
-html.dark:not(.hc) .job-card.on-hold { background: #2a1618; color: #ffc7c2; }
+html.dark:not(.hc) .app-header { background: #152033; color: #e7eef6; }
+html.dark:not(.hc) .header-btn,
+html.dark:not(.hc) .wx-chip,
+html.dark:not(.hc) .header-actas,
+html.dark:not(.hc) .header-actas select,
+html.dark:not(.hc) .user-pill { background: #24344c; color: #e7eef6; border-color: #3c516b; }
+html.dark:not(.hc) .wx-chip.gust-amber { background: #6b4a16; color: #ffe7c2; border-color: #e09a45; }
+html.dark:not(.hc) .wx-chip.gust-red { background: #6e3030; color: #ffd7d3; border-color: #e7a8a2; }
+html.dark:not(.hc) .tab.active { background: #24344c; color: #f0c48a; border-color: #e09a45; }
+html.dark:not(.hc) .login { background: linear-gradient(165deg, #101826, #1a2738 70%); }
+html.dark:not(.hc) .login-card,
+html.dark:not(.hc) .modal,
+html.dark:not(.hc) .profile-panel,
+html.dark:not(.hc) .safety-card,
+html.dark:not(.hc) .app-tile,
+html.dark:not(.hc) .pref-group,
+html.dark:not(.hc) .table-wrap,
 html.dark:not(.hc) .step-pip,
-html.dark:not(.hc) .safety-link,
-html.dark:not(.hc) .table-wrap { background: #10161e; color: var(--text); }
-html.dark:not(.hc) .tab.active { background: #d7e6f5; color: #102033; }
+html.dark:not(.hc) .circle,
+html.dark:not(.hc) .safety-link { background: var(--panel); color: var(--text); }
+html.dark:not(.hc) .safety-banner,
+html.dark:not(.hc) .safety-precedence,
+html.dark:not(.hc) .wx-advisory,
+html.dark:not(.hc) .chip.hot,
+html.dark:not(.hc) .trade-chip.on,
+html.dark:not(.hc) .role-btn.on { background: #3a2e1c; color: #ffe7c2; border-color: #e09a45; }
+html.dark:not(.hc) .chip.ok,
+html.dark:not(.hc) .complete-banner { background: #173528; color: #c9f3dc; }
+html.dark:not(.hc) .chip.bad,
+html.dark:not(.hc) .hold-banner,
+html.dark:not(.hc) .job-card.on-hold { background: #3a2224; color: #ffd4d0; }
+html.dark:not(.hc) .btn-danger { background: #3a2224; color: #ffd4d0; }
+html.dark:not(.hc) .btn-success { background: #173528; color: #c9f3dc; }
+html.dark:not(.hc) .react-pill.on,
+html.dark:not(.hc) .react-choice.on { background: #24344c; }
+html.dark:not(.hc) .crew-panel.unavailable,
+html.dark:not(.hc) .step-row.skipped,
+html.dark:not(.hc) .skip-banner,
+html.dark:not(.hc) .permit-status.unavailable { background: #2a3340; color: #d5deea; }
+html.dark:not(.hc) .app-tile .ico { background: #3a2e1c; color: #f0c48a; }
+html.dark:not(.hc) .burn text { fill: #e7eef6; }
+html.dark:not(.hc) .handover-sheet { background: #fff; color: #1a2332; }
+@media print {
+  html.dark, html.hc { color-scheme: light; --bg: #fff; --bg2: #fff; --panel: #fff; --panel2: #f4f6f9; --text: #1a2332; --ink: #1a2332; --muted: #333; --border: #ccc; --brand: #243044; --on-brand: #fff; }
+  html.dark .app-header, html.hc .app-header, .handover-sheet, .print-root { background: #fff !important; color: #111 !important; }
+}
 html.reduce-motion *,
 html.reduce-motion *::before,
 html.reduce-motion *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }

@@ -607,23 +607,30 @@
 
   async function refreshLive() {
     await refreshAll(false);
-    if (document.querySelector('.reason-overlay') || document.querySelector('.lightbox')) return;
-    const typing = document.activeElement && ['TEXTAREA', 'INPUT'].includes(document.activeElement.tagName);
+    if (document.querySelector('.reason-overlay') || document.querySelector('.lightbox') || document.querySelector('#step-editor')) return;
     const id = document.querySelector('#job-overlay')?.dataset.jobId;
-    if (!id || typing) return;
+    if (!id) return;
     const open = state.jobs.find((j) => j.id === id);
-    if (open) showJobModal(open);
+    if (!open) return;
+    if (jobStamp(open) === state.jobStamp) return;
+    showJobModal(open);
+  }
+  function jobStamp(job) {
+    const steps = (job.steps || []).map((s) => [s.id, s.sort_order, s.status, s.label, s.permit_holder, s.radio_channel].join(':')).join('|');
+    const comments = (job.comments || []).map((c) => c.id + (c.body || '')).join('|');
+    const reacts = (state.reactions || []).filter((r) => r.job_id === job.id).map((r) => r.id + r.kind + r.target_id).sort().join('|');
+    return [job.updated_at, job.status, job.on_hold, job.hold_reason, steps, comments, reacts].join('#');
   }
   function activeList() { return state.demoOn ? (state.demoJobs || []) : state.jobs; }
   async function refreshAll(showErr) {
-    if (state.demoOn) { renderAll(); return; }
+    if (state.demoOn) { renderAll({ keepScroll: true }); return; }
     const prev = (state.jobs || []).map((j) => ({ id: j.id, on_hold: j.on_hold, beam: j.beam, steps: j.steps }));
     try {
       await loadMeta();
       renderDataSource();
       await loadFullJobs();
       scanAlerts(prev, state.jobs);
-      renderAll();
+      renderAll({ keepScroll: true });
     } catch (e) {
       console.error(e);
       if (showErr) toast('Refresh failed: ' + e.message);
@@ -902,7 +909,18 @@
     if (state.channels.main) { try { sb.removeChannel(state.channels.main); } catch (_) {} }
     subscribeRealtime();
     refreshAll(true);
-    if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
+    if ('serviceWorker' in navigator) {
+      const hadController = !!navigator.serviceWorker.controller;
+      navigator.serviceWorker.register('./sw.js').then((reg) => reg.update().catch(() => {})).catch(() => {});
+      if (hadController) {
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          const at = Number(sessionStorage.getItem('bl_sw_reloaded_at') || 0);
+          if (Date.now() - at < 8000) return;
+          sessionStorage.setItem('bl_sw_reloaded_at', String(Date.now()));
+          location.reload();
+        });
+      }
+    }
   }
 
   function isoWeekFromKey(dayKey) {
@@ -1503,7 +1521,8 @@
       };
     });
   }
-  function renderAll() {
+  function renderAll(opts) {
+    const y = opts && opts.keepScroll ? window.scrollY : null;
     renderMiniStats(); renderJobList(); renderMine(); renderBoard();
     if (state.view === 'history') renderHistory();
     if (state.view === 'planner') renderPlanner();
@@ -1514,14 +1533,19 @@
     if (state.view === 'safety') renderSafety();
     if (state.view === 'dashboards') renderDashboards();
     if (state.view === 'admin') renderAdmin();
+    if (y != null && Math.abs(window.scrollY - y) > 1) window.scrollTo(0, y);
   }
   function setView(name) {
+    state.viewScroll = state.viewScroll || {};
+    const changed = name !== state.view;
+    if (changed) state.viewScroll[state.view] = window.scrollY;
     state.view = name;
     $$('#main-tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.view === name));
     ['jobs', 'mine', 'history', 'board', 'dash', 'turn', 'safety', 'planner', 'apps', 'dashboards', 'admin', 'audit', 'security'].forEach((v) => {
       $('#view-' + v).classList.toggle('hidden', v !== name);
     });
     renderAll();
+    if (changed) window.scrollTo(0, state.viewScroll[name] || 0);
   }
 
   function externalUrl(raw) {
@@ -1731,7 +1755,104 @@
     if (job) showJobModal(job);
   }
 
-  function showJobModal(job) {
+  function fieldToken(el) {
+    if (!el || el.nodeType !== 1) return '';
+    const form = el.closest && el.closest('form');
+    const parts = [];
+    if (el.id) parts.push('id:' + el.id);
+    const step = el.dataset.step || form?.dataset.step || '';
+    const section = el.dataset.section || form?.dataset.section || '';
+    if (step) parts.push('step:' + step);
+    if (section) parts.push('sec:' + section);
+    if (el.dataset.crewField) parts.push('crew:' + el.dataset.crewField);
+    if (el.dataset.label != null && el.dataset.label !== '') parts.push('lab:' + el.dataset.label);
+    if (el.name) parts.push('n:' + el.name);
+    if (el.dataset.up != null) parts.push('up:' + el.dataset.up);
+    if (el.dataset.down != null) parts.push('dn:' + el.dataset.down);
+    return parts.join('|');
+  }
+  function findToken(root, token) {
+    if (!root || !token) return null;
+    const fields = root.querySelectorAll('input, textarea, select, button');
+    for (const el of fields) if (fieldToken(el) === token) return el;
+    return null;
+  }
+  function capturePlace() {
+    const body = document.querySelector('#modal-root .modal-body');
+    const scope = body || document.querySelector('#app');
+    const drafts = [];
+    if (scope) {
+      scope.querySelectorAll('input, textarea, select').forEach((el) => {
+        if (el.type === 'file' || el.type === 'button' || el.type === 'submit' || el.type === 'hidden') return;
+        const dirty = (el.type === 'checkbox' || el.type === 'radio') ? el.checked !== el.defaultChecked : el.value !== el.defaultValue;
+        if (!dirty && document.activeElement !== el) return;
+        drafts.push({ token: fieldToken(el), type: el.type, value: el.value, checked: !!el.checked, start: el.selectionStart, end: el.selectionEnd });
+      });
+    }
+    let anchor = null;
+    if (body) {
+      const box = body.getBoundingClientRect();
+      const rows = [...body.querySelectorAll('.step-row')];
+      for (let i = 0; i < rows.length; i++) {
+        const rect = rows[i].getBoundingClientRect();
+        if (rect.bottom > box.top + 8 && rect.top < box.bottom) {
+          anchor = { stepId: rows[i].dataset.stepId || '', index: i, offset: rect.top - box.top };
+          break;
+        }
+      }
+    }
+    const active = document.activeElement;
+    return {
+      scrollTop: body ? body.scrollTop : 0,
+      pageY: window.scrollY,
+      anchor,
+      drafts,
+      focus: active && scope && scope.contains(active) ? fieldToken(active) : '',
+    };
+  }
+  function restorePlace(place) {
+    if (!place) return;
+    const apply = () => {
+      const body = document.querySelector('#modal-root .modal-body');
+      if (body) {
+        for (const draft of place.drafts || []) {
+          const el = findToken(body, draft.token);
+          if (!el || el.type === 'file') continue;
+          if (el.type === 'checkbox' || el.type === 'radio') el.checked = draft.checked;
+          else if (el.value !== draft.value) el.value = draft.value;
+        }
+        let pinned = false;
+        if (place.anchor) {
+          const rows = [...body.querySelectorAll('.step-row')];
+          let row = null;
+          if (place.anchor.stepId && window.CSS && CSS.escape) row = body.querySelector('.step-row[data-step-id="' + CSS.escape(place.anchor.stepId) + '"]');
+          if (!row && Number.isInteger(place.anchor.index)) row = rows[place.anchor.index] || null;
+          if (row) {
+            body.scrollTop += row.getBoundingClientRect().top - body.getBoundingClientRect().top - place.anchor.offset;
+            pinned = true;
+          }
+        }
+        if (!pinned) body.scrollTop = place.scrollTop || 0;
+      }
+      if (Math.abs(window.scrollY - (place.pageY || 0)) > 1) window.scrollTo(0, place.pageY || 0);
+      if (place.focus) {
+        const el = findToken(body || document, place.focus);
+        if (el) {
+          try { el.focus({ preventScroll: true }); } catch (_) {}
+          if (el.setSelectionRange && place.drafts) {
+            const draft = place.drafts.find((item) => item.token === place.focus);
+            if (draft && draft.start != null) { try { el.setSelectionRange(draft.start, draft.end); } catch (_) {} }
+          }
+        }
+      }
+    };
+    apply();
+    requestAnimationFrame(apply);
+  }
+  function showJobModal(job, opts) {
+    if (!job) return;
+    const same = document.querySelector('#job-overlay')?.dataset.jobId === job.id;
+    const kept = opts?.place || (same ? capturePlace() : null);
     const root = $('#modal-root');
     const plan = canPlan();
     const manage = canSupervise();
@@ -2014,10 +2135,14 @@
         const where = stepId ? ((job.steps.find((s) => s.id === stepId)?.label) || 'step') : section;
         await audit(job.id, 'comment', where + ': ' + (body || '(photo)').slice(0, 80));
         await sb.from('jobs').update({ updated_at: new Date().toISOString() }).eq('id', job.id);
+        if (form.body) form.body.value = '';
+        form._voiceBlob = null;
         await reloadJob();
         toast('Comment posted');
       };
     });
+    if (kept) restorePlace(kept);
+    state.jobStamp = jobStamp(job);
   }
 
   function voiceSpeech() {
@@ -2083,7 +2208,7 @@
       : (act ? '<button type="button" class="btn btn-sm" data-skip="' + s.id + '">Skip / Already complete</button>' : '');
     const active = s.status === 'ready' || s.status === 'in_progress';
     const shown = { ...s, _locked: !act };
-    return '<div class="step-row ' + s.status + '"><div class="step-head"><div class="step-label">' + esc(s.label) + ' <span class="chip" style="--tc:' + esc(tradeColor(s.trade)) + ';border-color:var(--tc)">' + esc(tradeLabel(s.trade)) + '</span></div><div class="chip' + (skipped ? ' skip' : '') + '">' + (skipped ? 'Skipped' : esc(String(s.status).replaceAll('_', ' '))) + '</div></div>' +
+    return '<div class="step-row ' + s.status + '" data-step-id="' + esc(s.id) + '"><div class="step-head"><div class="step-label">' + esc(s.label) + ' <span class="chip" style="--tc:' + esc(tradeColor(s.trade)) + ';border-color:var(--tc)">' + esc(tradeLabel(s.trade)) + '</span></div><div class="chip' + (skipped ? ' skip' : '') + '">' + (skipped ? 'Skipped' : esc(String(s.status).replaceAll('_', ' '))) + '</div></div>' +
       ((s.status === 'done' || skipped) ? gotItHtml('step', s.id, job.id) : '') +
       crewPanel(shown, active) +
       beamStepHtml(s) +
@@ -2216,7 +2341,10 @@
       ? existing.steps.map((s) => ({ trade: s.trade, label: s.label, beam: s.beam || null, status: s.status, skip_reason: s.skip_reason, skipped_by: s.skipped_by, skipped_at: s.skipped_at, assignees: (s.assignees || []).map((a) => ({ person_name: a.person_name, person_id: a.person_id, signed_off: a.signed_off, signed_at: a.signed_at })) }))
       : TEMPLATES.full_valve.steps.map((s) => ({ ...s, assignees: defaultAssignees(s.trade) }));
     let addReverse = false;
-    function renderEditor() {
+    function renderEditor(hint) {
+      $$('#step-editor [data-label]').forEach((inp) => { if (steps[+inp.dataset.label]) steps[+inp.dataset.label].label = inp.value; });
+      const place = $('#step-editor') ? capturePlace() : null;
+      if (place && hint && hint.anchor) place.anchor = hint.anchor;
       root.innerHTML = '<div class="overlay"><div class="modal"><div class="modal-head"><div><strong>' + (existing ? 'Edit job' : 'New job') + '</strong></div><button class="btn btn-sm" id="close-edit">Close</button></div><div class="modal-body">' +
         '<div class="filters" style="grid-template-columns:1fr 1fr">' +
         '<div><label class="lbl">Work order #</label><input class="input" id="f-wo" value="' + esc(existing?.wo_number || '') + '" /></div>' +
@@ -2248,11 +2376,26 @@
       $$('.trade-chip', root).forEach((b) => b.onclick = () => { const trade = b.dataset.trade; steps.push({ trade, label: tradeLabel(trade) + ' — work', assignees: defaultAssignees(trade) }); maybeReverse(); renderEditor(); });
       $('#f-reverse').onchange = (e) => { addReverse = e.target.checked; maybeReverse(true); renderEditor(); };
       function maybeReverse() { steps = steps.filter((s) => !s._rev); if (addReverse) { const base = steps.slice(); steps = base.concat(base.slice().reverse().map((s) => ({ trade: s.trade, label: s.trade + ' — reinstate / close', assignees: defaultAssignees(s.trade), _rev: true }))); } }
-      $$('[data-up]', root).forEach((b) => b.onclick = () => { const i = +b.dataset.up; [steps[i - 1], steps[i]] = [steps[i], steps[i - 1]]; renderEditor(); });
-      $$('[data-down]', root).forEach((b) => b.onclick = () => { const i = +b.dataset.down; [steps[i + 1], steps[i]] = [steps[i], steps[i + 1]]; renderEditor(); });
+      $$('[data-up]', root).forEach((b) => b.onclick = () => {
+        const i = +b.dataset.up;
+        const body = document.querySelector('#modal-root .modal-body');
+        const row = b.closest('.step-row');
+        const offset = row && body ? row.getBoundingClientRect().top - body.getBoundingClientRect().top : 0;
+        [steps[i - 1], steps[i]] = [steps[i], steps[i - 1]];
+        renderEditor({ anchor: { index: i - 1, offset } });
+      });
+      $$('[data-down]', root).forEach((b) => b.onclick = () => {
+        const i = +b.dataset.down;
+        const body = document.querySelector('#modal-root .modal-body');
+        const row = b.closest('.step-row');
+        const offset = row && body ? row.getBoundingClientRect().top - body.getBoundingClientRect().top : 0;
+        [steps[i + 1], steps[i]] = [steps[i], steps[i + 1]];
+        renderEditor({ anchor: { index: i + 1, offset } });
+      });
       $$('[data-del]', root).forEach((b) => b.onclick = () => { steps.splice(+b.dataset.del, 1); renderEditor(); });
       $$('[data-label]', root).forEach((inp) => inp.onchange = () => { steps[+inp.dataset.label].label = inp.value; });
-      $('#close-edit').onclick = () => { if (existing) showJobModal(existing); else root.innerHTML = ''; };
+      $('#close-edit').onclick = () => { if (existing) showJobModal(existing, { place: capturePlace() }); else root.innerHTML = ''; };
+      if (place) restorePlace(place);
       $('#save-job').onclick = async () => {
         const imported = existing?.beam?.source === 'beam';
         const plannedStart = imported ? '' : ($('#f-plan-start')?.value || '');

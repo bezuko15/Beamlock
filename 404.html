@@ -32,6 +32,7 @@
           }
         }
         var prefs = id ? JSON.parse(localStorage.getItem('bl_prefs_' + id) || 'null') : null;
+        if (!prefs && localStorage.getItem('bl_hc') === '1') prefs = { theme: 'dark', contrast: false, nightMigrated: true };
         if (prefs && !prefs.nightMigrated && prefs.contrast) { prefs.theme = 'dark'; prefs.contrast = false; }
         var dark = prefs ? (prefs.theme === 'dark' || (prefs.theme !== 'light' && systemDark)) : systemDark;
         if (prefs && prefs.contrast && prefs.nightMigrated) document.documentElement.classList.add('hc');
