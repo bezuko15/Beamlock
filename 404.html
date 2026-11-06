@@ -32,10 +32,12 @@
         <input id="login-name" class="input" autocomplete="username" />
         <label class="lbl" for="login-code">Code</label>
         <input id="login-code" class="input" type="password" inputmode="numeric" autocomplete="current-password" />
-        <label class="lbl" for="login-code2">Confirm code</label>
-        <input id="login-code2" class="input" type="password" inputmode="numeric" autocomplete="new-password" />
-        <label class="lbl" for="login-role">Trade or role</label>
-        <select id="login-role" class="select"></select>
+        <div id="login-extra" class="hidden">
+          <label class="lbl" for="login-code2">Confirm code</label>
+          <input id="login-code2" class="input" type="password" inputmode="numeric" autocomplete="new-password" />
+          <label class="lbl" for="login-role">Trade or role</label>
+          <select id="login-role" class="select"></select>
+        </div>
         <p id="login-error" class="hold-banner hidden"></p>
         <button class="btn btn-primary btn-block" style="margin-top:16px" id="login-btn" type="button">Sign in</button>
         <button class="btn btn-block" style="margin-top:8px" id="btn-install" type="button">Add to Home Screen</button>
@@ -71,6 +73,10 @@
         <label class="header-actas hidden" id="act-as-wrap" title="Operator view">View as
           <select id="act-as" aria-label="View as"></select>
         </label>
+        <label class="header-actas hidden" id="admin-view-wrap" title="Preview the app as another role. Writes stay on your admin account.">View as
+          <select id="admin-view" aria-label="View as"></select>
+        </label>
+        <button class="btn btn-sm header-btn hidden" id="admin-view-exit" type="button">Exit preview</button>
         <button class="btn btn-sm header-btn" id="btn-logout" type="button" title="Sign out of this device">Sign out</button>
       </div>
     </header>

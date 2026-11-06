@@ -5,7 +5,7 @@
   const cfg = window.BEAMLOCK_CONFIG;
   const { createClient } = window.supabase;
   const sb = createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
-    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storage: window.localStorage },
   });
 
   const DEFAULT_TRADES = [
@@ -216,7 +216,7 @@
   }
 
   const state = {
-    user: null, people: [], jobs: [], reactions: [], settings: null, tiles: [], view: 'jobs', weather: null,
+    user: null, people: [], jobs: [], reactions: [], settings: null, tiles: [], view: 'jobs', weather: null, adminPreview: '', explicitSignOut: false,
     filters: { q: '', status: '', priority: '', trade: '', unit: '', pu: '', when: '' }, boardUnit: '', boardPu: '', channels: {}, tradeDraft: null,
   };
 
@@ -262,8 +262,13 @@
   function loadUser() { try { return JSON.parse(localStorage.getItem('bl_user') || 'null'); } catch { return null; } }
 
   async function audit(jobId, action, detail) {
+    let text = detail || null;
+    if (state.user?.preview && action !== 'view_as') {
+      const mark = 'admin viewing as ' + tradeLabel(state.user.preview);
+      text = text ? text + ' · ' + mark : mark;
+    }
     await sb.from('audit_log').insert({
-      job_id: jobId || null, action, actor_name: state.user?.name, actor_role: state.user?.role, detail: detail || null,
+      job_id: jobId || null, action, actor_name: state.user?.name, actor_role: state.user?.realRole || state.user?.role, detail: text,
     });
   }
   const REACTIONS = [
@@ -609,7 +614,8 @@
     return (slug || 'user') + '@beamlock.local';
   }
   function isApproved() { return state.profile?.status === 'approved'; }
-  function isRealAdmin() { return isApproved() && state.profile?.role === 'Admin'; }
+  function isRealAdmin() { return isApproved() && state.profile?.role === 'Admin' && !state.user?.preview; }
+  function profileIsAdmin() { return isApproved() && state.profile?.role === 'Admin'; }
   function canManageUsers() { return isApproved() && ['Admin', 'Planner'].includes(state.user?.role); }
   function canPlan() { return isApproved() && ['Admin', 'Planner'].includes(state.user?.role); }
   function canSupervise() { return isApproved() && ['Admin', 'Planner', 'Supervisor'].includes(state.user?.role); }
@@ -622,21 +628,34 @@
   function applyProfile(p) {
     state.profile = p;
     const staff = ['Admin', 'Planner', 'Supervisor', 'Operator'];
-    const eff = p.status === 'approved' && p.role === 'Operator' && p.acting_as ? p.acting_as : p.role;
+    let eff = p.status === 'approved' && p.role === 'Operator' && p.acting_as ? p.acting_as : p.role;
+    let preview = '';
+    if (p.status === 'approved' && p.role === 'Admin' && state.adminPreview && state.adminPreview !== 'Admin') {
+      preview = state.adminPreview;
+      eff = preview;
+    }
     state.user = {
       name: p.display_name,
       role: p.status === 'approved' ? eff : p.role,
       realRole: p.role,
       actingAs: p.acting_as || '',
+      preview,
       trade: p.status === 'approved' && !staff.includes(eff) ? eff : null,
       personId: p.id,
       status: p.status,
     };
   }
+  function paintRememberedLogin() {
+    const name = localStorage.getItem('bl_last_name') || '';
+    const input = $('#login-name');
+    if (input && name) input.value = name;
+    $('#login-extra')?.classList.add('hidden');
+  }
   function showLogin(message) {
     $('#app')?.classList.add('hidden');
     $('#gate')?.classList.add('hidden');
     $('#login')?.classList.remove('hidden');
+    paintRememberedLogin();
     const err = $('#login-error');
     if (err) { err.textContent = message || ''; err.classList.toggle('hidden', !message); }
   }
@@ -645,15 +664,19 @@
     return 'Read only until ' + who + ' approves your ' + (profile.role || 'role') + ' role. You can look at jobs. You cannot change them yet.';
   }
   async function signOut(message) {
+    state.explicitSignOut = true;
     try { if (state.channels.main) sb.removeChannel(state.channels.main); } catch (_) {}
     try { if (state.channels.profile) sb.removeChannel(state.channels.profile); } catch (_) {}
     if (state.profileTimer) clearInterval(state.profileTimer);
     state.profileTimer = null;
     state.channels = {};
+    state.adminPreview = '';
+    localStorage.removeItem('bl_admin_preview');
     state.user = null;
     state.profile = null;
     state.jobs = [];
-    try { await sb.auth.signOut(); } catch (_) {}
+    try { await sb.auth.signOut({ scope: 'local' }); } catch (_) {}
+    setTimeout(() => { state.explicitSignOut = false; }, 1000);
     showLogin(message || '');
   }
   async function loadSignupRoles() {
@@ -688,16 +711,30 @@
       })
       .subscribe();
   }
+  function cachedProfile(id) {
+    try { return JSON.parse(localStorage.getItem('bl_profile_' + id) || 'null'); } catch { return null; }
+  }
   async function openSession() {
-    const { data: userData, error: userError } = await sb.auth.getUser();
-    if (userError || !userData?.user) { showLogin('Name or code is wrong.'); return; }
-    const { data: profile, error } = await sb.from('profiles').select('*').eq('id', userData.user.id).single();
-    if (error || !profile) { await signOut('This account has no profile.'); return; }
+    const { data: sessionData } = await sb.auth.getSession();
+    const user = sessionData?.session?.user;
+    if (!user) { showLogin(''); return; }
+    let profile = null;
+    const { data, error } = await sb.from('profiles').select('*').eq('id', user.id).single();
+    if (data) profile = data;
+    else profile = cachedProfile(user.id);
+    if (!profile) {
+      if (error && !navigator.onLine) { showLogin('Still offline. The saved session will open when the connection returns.'); return; }
+      await signOut('This account has no profile.');
+      return;
+    }
     if (profile.status === 'deactivated') { await signOut('This account is deactivated.'); return; }
     if (profile.status === 'rejected') { await signOut('This account was not approved.'); return; }
+    localStorage.setItem('bl_profile_' + user.id, JSON.stringify(profile));
+    if (profile.display_name) localStorage.setItem('bl_last_name', profile.display_name);
+    state.adminPreview = localStorage.getItem('bl_admin_preview') || '';
     applyProfile(profile);
     watchProfile(profile.id);
-    await sb.rpc('touch_sign_in');
+    if (navigator.onLine) { try { await sb.rpc('touch_sign_in'); } catch (_) {} }
     await enterApp();
   }
   function bindAuth() {
@@ -715,6 +752,11 @@
       if (guard.data === 'deactivated') return fail('This account is deactivated.');
       if (guard.data === 'rejected') return fail('This account was not approved.');
       if (guard.data === 'new') {
+        const extra = $('#login-extra');
+        if (extra && extra.classList.contains('hidden')) {
+          extra.classList.remove('hidden');
+          return fail('Confirm the code and choose your trade or role, then sign in.');
+        }
         if (!/^\d{6,}$/.test(code)) return fail('The code must be 6 or more digits.');
         if (code !== again) return fail('Confirm the code to create this account.');
         if (!role) return fail('Choose your trade or role.');
@@ -722,6 +764,7 @@
         if (error) return fail(/already/i.test(error.message) ? 'That name is already in use.' : error.message);
         const signed = await sb.auth.signInWithPassword({ email: accountEmail(name), password: code });
         if (signed.error) return fail(signed.error.message);
+        localStorage.setItem('bl_last_name', name);
         $('#login-error').classList.add('hidden');
         await openSession();
         return;
@@ -729,14 +772,18 @@
       if (guard.data !== 'ok') return fail('Name or code is wrong.');
       const { error } = await sb.auth.signInWithPassword({ email: accountEmail(name), password: code });
       if (error) return fail('Name or code is wrong.');
+      localStorage.setItem('bl_last_name', name);
       $('#login-error').classList.add('hidden');
       await openSession();
-      if (role && state.profile && role !== state.profile.role) toast('Your role is locked as ' + tradeLabel(state.profile.role) + '.');
+      const choosing = !$('#login-extra')?.classList.contains('hidden');
+      if (choosing && role && state.profile && role !== state.profile.role) toast('Your role is locked as ' + tradeLabel(state.profile.role) + '.');
     };
   }
   function paintIdentity() {
     if (!state.user) return;
-    const viewing = state.profile?.role === 'Operator' && state.profile?.acting_as ? ' · viewing as ' + tradeLabel(state.profile.acting_as) : '';
+    const viewing = state.user?.preview
+      ? ' · viewing as ' + tradeLabel(state.user.preview)
+      : (state.profile?.role === 'Operator' && state.profile?.acting_as ? ' · viewing as ' + tradeLabel(state.profile.acting_as) : '');
     $('#user-label').textContent = state.user.name + ' · ' + state.user.realRole + (state.profile?.status === 'pending' ? ' · read only' : '') + viewing;
     const banner = $('#readonly-banner');
     if (banner) {
@@ -752,6 +799,10 @@
     $('#btn-demo')?.classList.toggle('hidden', !isRealAdmin());
     $('#adm-settings')?.classList.toggle('hidden', !isRealAdmin());
     $('#act-as-wrap')?.classList.toggle('hidden', state.profile?.role !== 'Operator');
+    $('#admin-view-wrap')?.classList.toggle('hidden', !profileIsAdmin());
+    $('#admin-view-exit')?.classList.toggle('hidden', !(profileIsAdmin() && state.user?.preview));
+    const adminSel = $('#admin-view');
+    if (adminSel && document.activeElement !== adminSel) adminSel.value = state.user?.preview || '';
     if (!canPlan() && state.view === 'planner') setView('jobs');
     if (!canManageUsers() && state.view === 'admin') setView('jobs');
     if (!seeDash && (state.view === 'dash' || state.view === 'turn')) setView('jobs');
@@ -773,6 +824,37 @@
     const current = state.profile.acting_as || '';
     sel.innerHTML = '<option value="">Operator</option>' + roles.filter((r) => r.id !== 'Admin').map((r) => '<option value="' + esc(r.id) + '"' + (current === r.id ? ' selected' : '') + '>' + esc(r.label) + '</option>').join('');
   }
+  async function setAdminPreview(role) {
+    if (!profileIsAdmin()) return;
+    const next = role && role !== 'Admin' ? role : '';
+    const prev = state.adminPreview || '';
+    if (next === prev) return;
+    state.adminPreview = next;
+    if (next) localStorage.setItem('bl_admin_preview', next);
+    else localStorage.removeItem('bl_admin_preview');
+    applyProfile(state.profile);
+    paintIdentity();
+    renderAll();
+    await audit(null, 'view_as', next ? 'admin viewing as ' + tradeLabel(next) : 'admin exited preview');
+  }
+  async function fillAdminView() {
+    const sel = $('#admin-view');
+    if (!sel || !profileIsAdmin()) return;
+    let roles = [];
+    try { roles = await loadSignupRoles(); } catch (_) { roles = []; }
+    const staff = [
+      { id: 'Operator', label: 'Operator' },
+      { id: 'Planner', label: 'Planner' },
+      { id: 'Supervisor', label: 'Supervisor' },
+    ];
+    const trades = (roles.length ? roles : getTrades().map((t) => ({ id: t.id, label: t.label })))
+      .filter((r) => r.id && r.id !== 'Admin' && !staff.some((s) => s.id === r.id));
+    const options = [{ id: '', label: 'Admin' }].concat(staff).concat(trades);
+    sel.innerHTML = options.map((r) => '<option value="' + esc(r.id) + '">' + esc(r.label) + '</option>').join('');
+    sel.value = state.adminPreview || '';
+    sel.onchange = () => { setAdminPreview(sel.value).catch((err) => toast(err.message || 'Could not switch view')); };
+    $('#admin-view-exit') && ($('#admin-view-exit').onclick = () => { sel.value = ''; setAdminPreview('').catch(() => {}); });
+  }
 
   async function enterApp() {
     $('#login').classList.add('hidden');
@@ -780,6 +862,7 @@
     $('#app').classList.remove('hidden');
     paintIdentity();
     fillActAs().catch(() => {});
+    fillAdminView().catch(() => {});
     restoreFilters();
     syncFilterControls();
     renderDataSource();
@@ -1731,7 +1814,7 @@
           const buffers = [];
           for (const file of files) buffers.push(await file.arrayBuffer());
           const audioBuf = form._voiceBlob ? await form._voiceBlob.arrayBuffer() : null;
-          await queueOffline({ id: 'q-' + Date.now(), kind: 'comment', at: Date.now(), jobId: job.id, stepId: form.dataset.step || null, section: form.dataset.section || null, body: body || (form._voiceBlob ? '(voice note)' : '(photo)'), name: state.user.name, role: state.user.role, photos: buffers, audio: audioBuf, audioType: form._voiceBlob?.type || '' });
+          await queueOffline({ id: 'q-' + Date.now(), kind: 'comment', at: Date.now(), jobId: job.id, stepId: form.dataset.step || null, section: form.dataset.section || null, body: body || (form._voiceBlob ? '(voice note)' : '(photo)'), name: state.user.name, role: state.user.realRole || state.user.role, photos: buffers, audio: audioBuf, audioType: form._voiceBlob?.type || '' });
           toast('Comment saved on this device. It will send when you are back online.');
           return;
         }
@@ -1749,7 +1832,7 @@
         const stepId = form.dataset.step || null;
         const section = stepId ? null : (form.dataset.section || 'general');
         const { error } = await sb.from('comments').insert({
-          job_id: job.id, author_name: state.user.name, author_role: state.user.role,
+          job_id: job.id, author_name: state.user.name, author_role: state.user.realRole || state.user.role,
           channel: stepId ? 'step' : section, section, step_id: stepId,
           body: body || (audioPath ? '(voice note)' : '(photo)'), photo_path: photos[0] || null, photo_paths: photos, audio_path: audioPath,
         });
@@ -3272,8 +3355,14 @@
 
   bind();
   bindAuth();
-  sb.auth.getUser().then(({ data }) => {
-    if (data?.user) return openSession();
+  paintRememberedLogin();
+  sb.auth.onAuthStateChange(async (event) => {
+    if (event !== 'SIGNED_OUT' || state.explicitSignOut) return;
+    const { data } = await sb.auth.getSession();
+    if (!data?.session && state.user) showLogin('');
+  });
+  sb.auth.getSession().then(({ data }) => {
+    if (data?.session) return openSession();
     showLogin('');
     return loadSignupRoles();
   }).catch((e) => { console.error(e); showLogin('Could not reach the account service.'); });
