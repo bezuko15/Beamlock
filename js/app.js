@@ -1777,9 +1777,13 @@
     for (const el of fields) if (fieldToken(el) === token) return el;
     return null;
   }
+  let heldScroll = null;
   function capturePlace() {
     const body = document.querySelector('#modal-root .modal-body');
     const scope = body || document.querySelector('#app');
+    const jumped = !!(body && heldScroll != null && body.scrollTop + 40 < heldScroll);
+    const scrollTop = Math.max(body ? body.scrollTop : 0, heldScroll || 0);
+    heldScroll = null;
     const drafts = [];
     if (scope) {
       scope.querySelectorAll('input, textarea, select').forEach((el) => {
@@ -1790,7 +1794,7 @@
       });
     }
     let anchor = null;
-    if (body) {
+    if (body && !jumped) {
       const box = body.getBoundingClientRect();
       const rows = [...body.querySelectorAll('.step-row')];
       for (let i = 0; i < rows.length; i++) {
@@ -1803,7 +1807,7 @@
     }
     const active = document.activeElement;
     return {
-      scrollTop: body ? body.scrollTop : 0,
+      scrollTop,
       pageY: window.scrollY,
       anchor,
       drafts,
@@ -1821,18 +1825,17 @@
           if (el.type === 'checkbox' || el.type === 'radio') el.checked = draft.checked;
           else if (el.value !== draft.value) el.value = draft.value;
         }
-        let pinned = false;
+        body.scrollTop = place.scrollTop || 0;
         if (place.anchor) {
           const rows = [...body.querySelectorAll('.step-row')];
           let row = null;
           if (place.anchor.stepId && window.CSS && CSS.escape) row = body.querySelector('.step-row[data-step-id="' + CSS.escape(place.anchor.stepId) + '"]');
           if (!row && Number.isInteger(place.anchor.index)) row = rows[place.anchor.index] || null;
-          if (row) {
-            body.scrollTop += row.getBoundingClientRect().top - body.getBoundingClientRect().top - place.anchor.offset;
-            pinned = true;
+          if (row && row.getBoundingClientRect().height > 0) {
+            const delta = row.getBoundingClientRect().top - body.getBoundingClientRect().top - place.anchor.offset;
+            if (Math.abs(delta) > 1) body.scrollTop += delta;
           }
         }
-        if (!pinned) body.scrollTop = place.scrollTop || 0;
       }
       if (Math.abs(window.scrollY - (place.pageY || 0)) > 1) window.scrollTo(0, place.pageY || 0);
       if (place.focus) {
@@ -2341,30 +2344,36 @@
       ? existing.steps.map((s) => ({ trade: s.trade, label: s.label, beam: s.beam || null, status: s.status, skip_reason: s.skip_reason, skipped_by: s.skipped_by, skipped_at: s.skipped_at, assignees: (s.assignees || []).map((a) => ({ person_name: a.person_name, person_id: a.person_id, signed_off: a.signed_off, signed_at: a.signed_at })) }))
       : TEMPLATES.full_valve.steps.map((s) => ({ ...s, assignees: defaultAssignees(s.trade) }));
     let addReverse = false;
+    const typed = {};
     function renderEditor(hint) {
+      ['f-wo', 'f-pri', 'f-title', 'f-unit', 'f-area', 'f-tag', 'f-plan-start', 'f-plan-end', 'f-permit', 'f-loto', 'f-sap-wo', 'f-sap-not', 'f-pv', 'f-floc', 'f-pid', 'f-loc', 'f-desc'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) typed[id] = el.value;
+      });
+      const field = (id, fallback) => Object.prototype.hasOwnProperty.call(typed, id) ? typed[id] : (fallback || '');
       $$('#step-editor [data-label]').forEach((inp) => { if (steps[+inp.dataset.label]) steps[+inp.dataset.label].label = inp.value; });
       const place = $('#step-editor') ? capturePlace() : null;
       if (place && hint && hint.anchor) place.anchor = hint.anchor;
       root.innerHTML = '<div class="overlay"><div class="modal"><div class="modal-head"><div><strong>' + (existing ? 'Edit job' : 'New job') + '</strong></div><button class="btn btn-sm" id="close-edit">Close</button></div><div class="modal-body">' +
         '<div class="filters" style="grid-template-columns:1fr 1fr">' +
-        '<div><label class="lbl">Work order #</label><input class="input" id="f-wo" value="' + esc(existing?.wo_number || '') + '" /></div>' +
-        '<div><label class="lbl">Priority</label><select class="select" id="f-pri">' + ['Critical', 'High', 'Normal', 'Low'].map((p) => '<option ' + ((existing?.priority || 'Normal') === p ? 'selected' : '') + '>' + p + '</option>').join('') + '</select></div>' +
-        '<div style="grid-column:1/-1"><label class="lbl">Title</label><input class="input" id="f-title" value="' + esc(existing?.title || '') + '" /></div>' +
-        '<div><label class="lbl">Unit</label><select class="select" id="f-unit">' + getUnits().map((u) => '<option value="' + esc(u) + '"' + ((existing?.unit ? normalizeUnit(existing.unit) : getUnits()[0]) === u ? ' selected' : '') + '>' + esc(u) + '</option>').join('') + '</select></div>' +
-        '<div><label class="lbl">Area</label><input class="input" id="f-area" value="' + esc(existing?.area || '') + '" /></div>' +
-        '<div><label class="lbl">Equipment tag</label><input class="input" id="f-tag" value="' + esc(existing?.equipment_tag || '') + '" /></div>' +
+        '<div><label class="lbl">Work order #</label><input class="input" id="f-wo" value="' + esc(field('f-wo', existing?.wo_number || '')) + '" /></div>' +
+        '<div><label class="lbl">Priority</label><select class="select" id="f-pri">' + ['Critical', 'High', 'Normal', 'Low'].map((p) => '<option ' + ((field('f-pri', existing?.priority || 'Normal')) === p ? 'selected' : '') + '>' + p + '</option>').join('') + '</select></div>' +
+        '<div style="grid-column:1/-1"><label class="lbl">Title</label><input class="input" id="f-title" value="' + esc(field('f-title', existing?.title || '')) + '" /></div>' +
+        '<div><label class="lbl">Unit</label><select class="select" id="f-unit">' + getUnits().map((u) => '<option value="' + esc(u) + '"' + (field('f-unit', existing?.unit ? normalizeUnit(existing.unit) : getUnits()[0]) === u ? ' selected' : '') + '>' + esc(u) + '</option>').join('') + '</select></div>' +
+        '<div><label class="lbl">Area</label><input class="input" id="f-area" value="' + esc(field('f-area', existing?.area || '')) + '" /></div>' +
+        '<div><label class="lbl">Equipment tag</label><input class="input" id="f-tag" value="' + esc(field('f-tag', existing?.equipment_tag || '')) + '" /></div>' +
         (existing?.beam?.source === 'beam'
           ? '<div style="grid-column:1/-1" class="pref-note">Scheduled ' + esc(scheduleLabel(existing)) + '. Due ' + esc(dueKey(existing) ? fmtDayKey(dueKey(existing)) : '—') + '. The maintenance schedule sets these. Re-import updates them.</div>'
-          : '<div><label class="lbl">Planned start</label><input class="input" id="f-plan-start" type="date" value="' + esc(parseCalendarKey(existing?.beam?.plannedStart) || parseCalendarKey(existing?.job_date) || '') + '" /></div><div><label class="lbl">Planned end</label><input class="input" id="f-plan-end" type="date" value="' + esc(parseCalendarKey(existing?.beam?.plannedEnd) || '') + '" /></div>') +
-        '<div><label class="lbl">Permit #</label><input class="input" id="f-permit" value="' + esc(existing?.permit_number || '') + '" /></div>' +
-        '<div><label class="lbl">LOTO</label><input class="input" id="f-loto" value="' + esc(existing?.loto_isolation || '') + '" /></div>' +
-        '<div><label class="lbl">SAP work order</label><input class="input" id="f-sap-wo" value="' + esc(existing?.sap_work_order || existing?.wo_number || '') + '" /></div>' +
-        '<div><label class="lbl">SAP notification</label><input class="input" id="f-sap-not" value="' + esc(existing?.sap_notification || '') + '" /></div>' +
-        '<div><label class="lbl">Permit Vision #</label><input class="input" id="f-pv" value="' + esc(existing?.permit_vision_id || '') + '" /></div>' +
-        '<div><label class="lbl">Functional location</label><input class="input" id="f-floc" value="' + esc(existing?.functional_location || '') + '" /></div>' +
-        '<div><label class="lbl">P&amp;ID / drawing #</label><input class="input" id="f-pid" value="' + esc(existing?.pid_number || '') + '" /></div>' +
-        '<div><label class="lbl">Equipment location</label><input class="input" id="f-loc" placeholder="Area / elevation / grid" value="' + esc(existing?.equipment_location || '') + '" /></div>' +
-        '<div style="grid-column:1/-1"><label class="lbl">Description</label><textarea class="textarea" id="f-desc">' + esc(existing?.description || '') + '</textarea></div></div>' +
+          : '<div><label class="lbl">Planned start</label><input class="input" id="f-plan-start" type="date" value="' + esc(field('f-plan-start', parseCalendarKey(existing?.beam?.plannedStart) || parseCalendarKey(existing?.job_date) || '')) + '" /></div><div><label class="lbl">Planned end</label><input class="input" id="f-plan-end" type="date" value="' + esc(field('f-plan-end', parseCalendarKey(existing?.beam?.plannedEnd) || '')) + '" /></div>') +
+        '<div><label class="lbl">Permit #</label><input class="input" id="f-permit" value="' + esc(field('f-permit', existing?.permit_number || '')) + '" /></div>' +
+        '<div><label class="lbl">LOTO</label><input class="input" id="f-loto" value="' + esc(field('f-loto', existing?.loto_isolation || '')) + '" /></div>' +
+        '<div><label class="lbl">SAP work order</label><input class="input" id="f-sap-wo" value="' + esc(field('f-sap-wo', existing?.sap_work_order || existing?.wo_number || '')) + '" /></div>' +
+        '<div><label class="lbl">SAP notification</label><input class="input" id="f-sap-not" value="' + esc(field('f-sap-not', existing?.sap_notification || '')) + '" /></div>' +
+        '<div><label class="lbl">Permit Vision #</label><input class="input" id="f-pv" value="' + esc(field('f-pv', existing?.permit_vision_id || '')) + '" /></div>' +
+        '<div><label class="lbl">Functional location</label><input class="input" id="f-floc" value="' + esc(field('f-floc', existing?.functional_location || '')) + '" /></div>' +
+        '<div><label class="lbl">P&amp;ID / drawing #</label><input class="input" id="f-pid" value="' + esc(field('f-pid', existing?.pid_number || '')) + '" /></div>' +
+        '<div><label class="lbl">Equipment location</label><input class="input" id="f-loc" placeholder="Area / elevation / grid" value="' + esc(field('f-loc', existing?.equipment_location || '')) + '" /></div>' +
+        '<div style="grid-column:1/-1"><label class="lbl">Description</label><textarea class="textarea" id="f-desc">' + esc(field('f-desc', existing?.description || '')) + '</textarea></div></div>' +
         '<label class="lbl">Quick templates</label><div class="template-row">' + Object.entries(TEMPLATES).map(([k, v]) => '<button type="button" class="btn btn-sm" data-tpl="' + k + '">' + esc(v.name) + '</button>').join('') + '</div>' +
         '<label class="lbl">Tap trades to build sequence</label><div class="trade-chips">' + activeTrades().map((t) => '<button type="button" class="trade-chip" data-trade="' + t.id + '" style="--tc:' + esc(t.color) + '"><span class="trade-dot"></span>' + esc(t.short) + ' ' + esc(t.label) + '</button>').join('') +
         '<label style="display:flex;align-items:center;gap:8px;margin-left:8px"><input type="checkbox" id="f-reverse" ' + (addReverse ? 'checked' : '') + ' /> Add reverse steps</label></div>' +
@@ -3893,6 +3902,11 @@
         renderBoard();
       }
     });
+    document.addEventListener('pointerdown', (e) => {
+      const body = document.querySelector('#modal-root .modal-body');
+      if (!body || !body.contains(e.target)) { heldScroll = null; return; }
+      heldScroll = body.scrollTop;
+    }, true);
     $('#btn-refresh').onclick = () => refreshAll(true);
     $('#btn-new-job').onclick = () => openJobEditor(null);
     $('#btn-beam-import').onclick = openBeamImport;
