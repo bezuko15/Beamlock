@@ -16,6 +16,32 @@
   <link rel="icon" href="./icons/favicon.png" />
   <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
   <title>Beamlock</title>
+  <script>
+    (function () {
+      try {
+        var systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var keys = Object.keys(localStorage);
+        var authKey = keys.filter(function (k) { return k.indexOf('-auth-token') !== -1; })[0];
+        var id = '';
+        if (authKey) {
+          var session = JSON.parse(localStorage.getItem(authKey) || '{}');
+          id = session.user && session.user.id;
+          if (!id && session.access_token) {
+            var part = session.access_token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+            id = JSON.parse(atob(part)).sub;
+          }
+        }
+        var prefs = id ? JSON.parse(localStorage.getItem('bl_prefs_' + id) || 'null') : null;
+        if (prefs && !prefs.nightMigrated && prefs.contrast) { prefs.theme = 'dark'; prefs.contrast = false; }
+        var dark = prefs ? (prefs.theme === 'dark' || (prefs.theme !== 'light' && systemDark)) : systemDark;
+        if (prefs && prefs.contrast && prefs.nightMigrated) document.documentElement.classList.add('hc');
+        else if (dark) document.documentElement.classList.add('dark');
+        if (prefs && prefs.font) document.documentElement.dataset.font = prefs.font;
+        if (prefs && prefs.text) document.documentElement.dataset.text = prefs.text;
+        if (prefs && prefs.density) document.documentElement.dataset.density = prefs.density;
+      } catch (e) {}
+    })();
+  </script>
   <link rel="stylesheet" href="./css/app.css" />
 </head>
 <body>
@@ -66,9 +92,8 @@
       <button type="button" class="wx-chip" id="wx-chip" aria-label="Weather at Shell Scotford">Weather …</button>
       <div class="header-actions">
         <div class="user-pill" title="Connection status"><span class="live-dot" id="live-dot"></span><span class="live-label" id="live-label">Live</span><span id="user-label"></span></div>
-        <button class="btn btn-sm header-btn" id="btn-hc" type="button" title="High contrast" aria-pressed="false">High contrast</button>
+        <button class="btn btn-sm header-btn theme-toggle" id="btn-theme" type="button" title="Dark mode" aria-pressed="false" aria-label="Switch to dark mode"><svg class="theme-moon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M21 14.5A8.5 8.5 0 0 1 9.5 3a7 7 0 1 0 11.5 11.5z"/></svg><svg class="theme-sun hidden" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="currentColor"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" d="M12 2.5v2.2M12 19.3V21.5M2.5 12h2.2M19.3 12h2.2M4.8 4.8l1.6 1.6M17.6 17.6l1.6 1.6M19.2 4.8l-1.6 1.6M6.4 17.6l-1.6 1.6"/></svg></button>
         <button class="btn btn-sm header-btn hidden" id="btn-demo" type="button" title="Presentation demo">Demo</button>
-        <button class="btn btn-sm header-btn" id="btn-profile" type="button" title="Your settings">Profile <span id="sync-count" class="badge hidden">0</span></button>
         <button class="btn btn-sm header-btn" id="btn-notify" type="button" title="Turn on notifications">Notifications</button>
         <label class="header-actas hidden" id="act-as-wrap" title="Operator view">View as
           <select id="act-as" aria-label="View as"></select>
@@ -78,6 +103,23 @@
         </label>
         <button class="btn btn-sm header-btn hidden" id="admin-view-exit" type="button">Exit preview</button>
         <button class="btn btn-sm header-btn" id="btn-logout" type="button" title="Sign out of this device">Sign out</button>
+        <div class="profile-slot">
+          <button class="btn btn-sm header-btn" id="btn-profile" type="button" title="Your account" aria-expanded="false" aria-controls="profile-panel">Profile <span id="sync-count" class="badge hidden">0</span></button>
+          <div id="profile-panel" class="profile-panel hidden" role="dialog" aria-label="Profile">
+            <div id="profile-home">
+              <div class="profile-panel-bar"><strong>Profile</strong><button type="button" class="btn btn-sm" id="profile-close">Close</button></div>
+              <p id="profile-who"></p>
+              <p id="profile-queue" class="pref-note"></p>
+              <button type="button" class="btn btn-block" id="btn-install-profile" data-install>Add to Home Screen</button>
+              <button type="button" class="profile-entry" id="profile-open-settings"><span><strong>Settings</strong><small>Appearance, region, accessibility, notifications, and sign-in code</small></span><span aria-hidden="true">›</span></button>
+            </div>
+            <div id="profile-settings" class="hidden">
+              <div class="profile-panel-bar"><button type="button" class="btn btn-sm" id="profile-back">Back</button><strong>Settings</strong><button type="button" class="btn btn-sm" id="profile-settings-close">Close</button></div>
+              <p class="pref-note">Only for your account. Jobs, roles, and site setup stay as they are.</p>
+              <div id="settings-body"></div>
+            </div>
+          </div>
+        </div>
       </div>
     </header>
     <div id="net-banner" class="net-banner hidden" role="status"></div>
@@ -107,7 +149,6 @@
         <button class="tab hidden" id="tab-dash" data-view="dash">Dashboard</button>
         <button class="tab hidden" id="tab-turn" data-view="turn">Turnaround</button>
         <button class="tab" data-view="safety"><svg class="tab-ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2.2 20 5.2v6.2c0 4.7-3.2 8-8 9.6-4.8-1.6-8-4.9-8-9.6V5.2L12 2.2z"/></svg> Safety</button>
-        <button class="tab" data-view="settings">Settings</button>
         <button class="tab" data-view="planner" id="tab-planner">Planner</button>
         <button class="tab" data-view="dashboards">Dashboards</button>
         <button class="tab" data-view="audit">Audit</button>
@@ -282,12 +323,6 @@
         <label class="lbl" for="safety-unit">Unit</label>
         <select id="safety-unit" class="select"></select>
         <div id="safety-body"></div>
-      </section>
-
-      <section id="view-settings" class="hidden">
-        <h2 style="margin-top:0">Settings</h2>
-        <p class="settings-lead">These choices are only for your account. They do not change jobs, roles, or site setup.</p>
-        <div id="settings-body"></div>
       </section>
 
       <section id="view-security" class="hidden security-page">

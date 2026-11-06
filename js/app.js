@@ -881,7 +881,7 @@
     if (land !== state.view) {
       state.view = land;
       $$('#main-tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.view === land));
-      ['jobs', 'mine', 'history', 'board', 'dash', 'turn', 'safety', 'planner', 'apps', 'dashboards', 'admin', 'audit', 'security', 'settings'].forEach((v) => {
+      ['jobs', 'mine', 'history', 'board', 'dash', 'turn', 'safety', 'planner', 'apps', 'dashboards', 'admin', 'audit', 'security'].forEach((v) => {
         $('#view-' + v)?.classList.toggle('hidden', v !== land);
       });
     }
@@ -1368,12 +1368,11 @@
     if (state.view === 'safety') renderSafety();
     if (state.view === 'dashboards') renderDashboards();
     if (state.view === 'admin') renderAdmin();
-    if (state.view === 'settings') renderSettings();
   }
   function setView(name) {
     state.view = name;
     $$('#main-tabs .tab').forEach((t) => t.classList.toggle('active', t.dataset.view === name));
-    ['jobs', 'mine', 'history', 'board', 'dash', 'turn', 'safety', 'planner', 'apps', 'dashboards', 'admin', 'audit', 'security', 'settings'].forEach((v) => {
+    ['jobs', 'mine', 'history', 'board', 'dash', 'turn', 'safety', 'planner', 'apps', 'dashboards', 'admin', 'audit', 'security'].forEach((v) => {
       $('#view-' + v).classList.toggle('hidden', v !== name);
     });
     renderAll();
@@ -2922,7 +2921,7 @@
     const real = state.user?.realRole;
     const approved = isApproved();
     if (approved && ['Supervisor', 'Planner', 'Admin'].includes(real)) items.push(['dash', 'Dashboard'], ['turn', 'Turnaround']);
-    items.push(['dashboards', 'Dashboards'], ['audit', 'Audit'], ['security', 'Security'], ['settings', 'Settings']);
+    items.push(['dashboards', 'Dashboards'], ['audit', 'Audit'], ['security', 'Security']);
     if (approved && ['Admin', 'Planner'].includes(real)) items.push(['planner', 'Planner'], ['admin', 'Admin']);
     return items;
   }
@@ -2936,12 +2935,16 @@
     const pick = (key, allowed, fallback) => allowed.includes(src[key]) ? src[key] : fallback;
     const zone = ZONE_CHOICES.some((item) => item[0] === src.zone) && zoneOk(src.zone) ? src.zone : base.zone;
     const landing = landingChoices().some((item) => item[0] === src.landing) ? src.landing : base.landing;
+    let theme = pick('theme', ['system', 'light', 'dark'], base.theme);
+    let contrast = !!src.contrast;
+    if (!Object.prototype.hasOwnProperty.call(src, 'nightMigrated') && contrast) { theme = 'dark'; contrast = false; }
     return {
-      theme: pick('theme', ['system', 'light', 'dark'], base.theme),
+      theme,
       font: pick('font', ['system', 'verdana', 'georgia', 'arial'], base.font),
       text: pick('text', ['default', 'large', 'xlarge'], base.text),
       density: pick('density', ['comfortable', 'compact'], base.density),
-      contrast: !!src.contrast,
+      contrast,
+      nightMigrated: true,
       motion: pick('motion', ['system', 'reduce'], base.motion),
       zone,
       clock: pick('clock', ['24', '12'], base.clock),
@@ -2961,7 +2964,7 @@
     let stored = null;
     try { stored = JSON.parse(localStorage.getItem(prefsKey()) || 'null'); } catch { stored = null; }
     if (!stored && localStorage.getItem('bl_hc') === '1') {
-      stored = { contrast: true };
+      stored = { theme: 'dark', contrast: false, nightMigrated: true };
       localStorage.removeItem('bl_hc');
     }
     if (localStorage.getItem('bl_notify_' + state.profile.id) === '1') stored = { ...(stored || {}), notify: true };
@@ -2980,8 +2983,17 @@
     root.dataset.density = p.density;
     root.dataset.motion = p.motion;
     root.classList.toggle('reduce-motion', p.motion === 'reduce' || (p.motion === 'system' && systemReduce()));
-    const btn = $('#btn-hc');
-    if (btn) btn.setAttribute('aria-pressed', p.contrast ? 'true' : 'false');
+    const night = p.theme === 'dark' || (p.theme === 'system' && systemDark());
+    const themeBtn = $('#btn-theme');
+    if (themeBtn) {
+      themeBtn.setAttribute('aria-pressed', night ? 'true' : 'false');
+      themeBtn.setAttribute('aria-label', night ? 'Switch to light mode' : 'Switch to dark mode');
+      themeBtn.title = night ? 'Light mode' : 'Dark mode';
+      themeBtn.querySelector('.theme-moon')?.classList.toggle('hidden', night);
+      themeBtn.querySelector('.theme-sun')?.classList.toggle('hidden', !night);
+      const themeSel = document.querySelector('#profile-panel [data-pref="theme"]');
+      if (themeSel && document.activeElement !== themeSel) themeSel.value = p.theme;
+    }
     const notifyBtn = $('#btn-notify');
     if (notifyBtn) notifyBtn.setAttribute('aria-pressed', p.notify ? 'true' : 'false');
   }
@@ -3015,6 +3027,7 @@
       state.prefs = sanitizePrefs(data.prefs);
       rememberLocalPrefs(state.prefs, remoteAt);
       applyAppearance(state.prefs);
+      if (data.prefs && data.prefs.contrast && !state.prefs.contrast) await persistPrefs();
       return;
     }
     if (!data || localAt > remoteAt) await persistPrefs();
@@ -3041,10 +3054,10 @@
       '<p class="pref-sample">The quick brown fox jumps over the lazy dog.</p>' +
       '<label class="pref-row">Text size<select class="select" data-pref="text">' + opt('default', 'Default', p.text) + opt('large', 'Large', p.text) + opt('xlarge', 'Extra large', p.text) + '</select></label>' +
       '<label class="pref-row">Density<select class="select" data-pref="density">' + opt('comfortable', 'Comfortable', p.density) + opt('compact', 'Compact', p.density) + '</select></label>' +
-      '<p class="pref-note">Compact tightens spacing around cards. Buttons, tabs, and fields stay at least 44 pixels tall.</p></section>' +
+      '<p class="pref-note">The moon button beside Profile switches light and dark. System follows this device. Compact tightens card spacing and does not shrink buttons.</p></section>' +
       '<section class="pref-group"><h3>Accessibility</h3>' +
       '<label class="pref-row"><span><input type="checkbox" data-pref="contrast"' + (p.contrast ? ' checked' : '') + ' /> High contrast</span></label>' +
-      '<p class="pref-note">This is the same switch as High contrast in the header. It overrides light and dark.</p>' +
+      '<p class="pref-note">Optional yellow on black for low vision. It overrides light and dark. Night mode is the normal dark theme.</p>' +
       '<label class="pref-row">Motion<select class="select" data-pref="motion">' + opt('system', 'System default', p.motion) + opt('reduce', 'Reduce motion', p.motion) + '</select></label></section>' +
       '<section class="pref-group"><h3>Regional</h3>' +
       '<label class="pref-row">Time zone<select class="select" data-pref="zone">' + zones.map((item) => opt(item[0], item[1], p.zone)).join('') + '</select></label>' +
@@ -3063,10 +3076,7 @@
       '<label class="pref-row">Page after sign-in<select class="select" data-pref="landing">' + landingChoices().map((item) => opt(item[0], item[1], p.landing)).join('') + '</select></label>' +
       '<p class="pref-note">Used the next time you sign in. Only pages your role can open are listed.</p>' +
       '<button type="button" class="btn" id="settings-reset">Reset my preferences</button></section>' +
-      '<section class="pref-group"><h3>Account</h3>' +
-      '<p><strong>' + esc(state.user.name || '') + '</strong><br>' + esc(state.user.realRole || '') + (state.profile?.status === 'pending' ? ' · waiting for approval' : '') + '</p>' +
-      '<button type="button" class="btn" id="btn-install-profile" data-install>Add to Home Screen</button>' +
-      '<h3>Change sign-in code</h3>' +
+      '<section class="pref-group"><h3>Sign-in code</h3>' +
       '<p class="pref-note">This changes the code for your own account. Your role stays the same. A connection is required. The code is not saved on this device.</p>' +
       '<form id="code-form" method="post" action="#" autocomplete="off">' +
       '<label class="lbl" for="code-current">Current sign-in code</label><input id="code-current" class="input" type="password" inputmode="numeric" autocomplete="current-password" autocapitalize="off" spellcheck="false" />' +
@@ -3105,7 +3115,6 @@
       window.scrollTo(0, y);
       toast('Your preferences were reset');
     });
-    $('#btn-install-profile') && ($('#btn-install-profile').onclick = () => startInstall());
     const form = $('#code-form');
     if (form) form.onsubmit = async (e) => {
       e.preventDefault();
@@ -3127,7 +3136,35 @@
       toast('Sign-in code changed. This device stays signed in.');
     };
   }
-  function openProfile() { setView('settings'); }
+  function paintProfileHome() {
+    const who = $('#profile-who');
+    if (!who || !state.user) return;
+    const pending = state.profile?.status === 'pending' ? '<br>Waiting for approval. You can look, not change jobs yet.' : '';
+    who.innerHTML = '<strong>' + esc(state.user.name || '') + '</strong><br>' + esc(state.user.realRole || '') + pending;
+  }
+  function showProfileHome() {
+    $('#profile-home')?.classList.remove('hidden');
+    $('#profile-settings')?.classList.add('hidden');
+    paintProfileHome();
+    paintInstall();
+  }
+  function showProfileSettings() {
+    $('#profile-home')?.classList.add('hidden');
+    $('#profile-settings')?.classList.remove('hidden');
+    renderSettings();
+  }
+  function setProfileOpen(open) {
+    const panel = $('#profile-panel');
+    const btn = $('#btn-profile');
+    if (!panel || !btn) return;
+    panel.classList.toggle('hidden', !open);
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) showProfileHome();
+  }
+  function openProfile() {
+    const panel = $('#profile-panel');
+    setProfileOpen(!!panel?.classList.contains('hidden'));
+  }
   function offlineDB() {
     return new Promise((resolve, reject) => {
       const req = indexedDB.open('beamlock-offline', 1);
@@ -3157,6 +3194,8 @@
       if (!el) return;
       el.textContent = String(n);
       el.classList.toggle('hidden', !n);
+      const queue = $('#profile-queue');
+      if (queue) queue.textContent = n ? n + (n === 1 ? ' change is' : ' changes are') + ' waiting to send.' : 'Nothing is waiting to send.';
     } catch (_) {}
   }
   async function flushOutbox() {
@@ -3517,7 +3556,18 @@
     $('#demo-exit') && ($('#demo-exit').onclick = stopDemo);
     $('#demo-reset') && ($('#demo-reset').onclick = resetDemo);
     $('#demo-play') && ($('#demo-play').onclick = toggleDemoPlay);
-    $('#btn-profile') && ($('#btn-profile').onclick = openProfile);
+    $('#btn-profile') && ($('#btn-profile').onclick = (e) => { e.stopPropagation(); openProfile(); });
+    $('#profile-close') && ($('#profile-close').onclick = () => setProfileOpen(false));
+    $('#profile-settings-close') && ($('#profile-settings-close').onclick = () => setProfileOpen(false));
+    $('#profile-back') && ($('#profile-back').onclick = () => { showProfileHome(); $('#btn-profile')?.focus({ preventScroll: true }); });
+    $('#profile-open-settings') && ($('#profile-open-settings').onclick = () => showProfileSettings());
+    document.addEventListener('click', (e) => {
+      const panel = $('#profile-panel');
+      if (!panel || panel.classList.contains('hidden')) return;
+      if (panel.contains(e.target) || $('#btn-profile')?.contains(e.target)) return;
+      setProfileOpen(false);
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setProfileOpen(false); });
     window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; paintInstall(); });
     window.addEventListener('appinstalled', () => { deferredInstall = null; localStorage.setItem('bl_install_dismiss', '1'); paintInstall(); });
     $('#btn-install') && ($('#btn-install').onclick = () => startInstall());
@@ -3530,7 +3580,10 @@
     $('#btn-turn-csv') && ($('#btn-turn-csv').onclick = () => exportTurnaround('csv'));
     $('#btn-print-security') && ($('#btn-print-security').onclick = () => window.print());
     refreshSyncCount();
-    $('#btn-hc').onclick = () => { updatePref('contrast', !state.prefs?.contrast).catch(() => toast('Could not save that preference')); };
+    $('#btn-theme') && ($('#btn-theme').onclick = async () => {
+      const night = state.prefs?.theme === 'dark' || (state.prefs?.theme !== 'light' && systemDark());
+      await updatePref('theme', night ? 'light' : 'dark');
+    });
     $('#btn-notify').onclick = async () => {
       if (!('Notification' in window)) return toast('This browser has no notifications');
       const next = !state.prefs?.notify;
@@ -3539,8 +3592,9 @@
         if (perm !== 'granted') return toast('Notifications were not allowed');
       }
       await updatePref('notify', next);
+      const box = document.querySelector('#profile-panel [data-pref="notify"]');
+      if (box) box.checked = !!state.prefs?.notify;
       toast(next ? 'Alerts on for this device' : 'Alerts off for this device');
-      if (state.view === 'settings') renderSettings();
     };
     if (window.matchMedia) {
       const themeQ = window.matchMedia('(prefers-color-scheme: dark)');
