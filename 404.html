@@ -31,7 +31,7 @@
             id = JSON.parse(atob(part)).sub;
           }
         }
-        var prefs = id ? JSON.parse(localStorage.getItem('bl_prefs_' + id) || 'null') : null;
+        var prefs = id ? JSON.parse(localStorage.getItem('bl_prefs_' + id) || 'null') : JSON.parse(localStorage.getItem('bl_prefs_sandbox') || 'null');
         if (!prefs && localStorage.getItem('bl_hc') === '1') prefs = { theme: 'dark', contrast: false, nightMigrated: true };
         if (prefs && !prefs.nightMigrated && prefs.contrast) { prefs.theme = 'dark'; prefs.contrast = false; }
         var dark = prefs ? (prefs.theme === 'dark' || (prefs.theme !== 'light' && systemDark)) : systemDark;
@@ -46,7 +46,7 @@
   <link rel="stylesheet" href="./css/app.css" />
 </head>
 <body>
-  <div id="login" class="login">
+  <div id="login" class="login hidden">
     <div class="login-card">
       <div class="brand" style="margin-bottom:12px;color:var(--navy)">
         <img src="./icons/icon-192.png" alt="Beamlock" />
@@ -67,6 +67,7 @@
         </div>
         <p id="login-error" class="hold-banner hidden"></p>
         <button class="btn btn-primary btn-block" style="margin-top:16px" id="login-btn" type="button">Sign in</button>
+        <button class="btn btn-block" style="margin-top:8px" id="login-back" type="button">Back to preview</button>
         <button class="btn btn-block" style="margin-top:8px" id="btn-install" type="button">Add to Home Screen</button>
       </div>
     </div>
@@ -126,7 +127,9 @@
     <div id="net-banner" class="net-banner hidden" role="status"></div>
     <div id="pull-hint" class="pull-hint hidden">Release to refresh</div>
     <main class="layout">
-      <div id="demo-banner" class="demo-banner hidden"><strong>DEMO</strong> Sample orders only. Real jobs and accounts are not changed.
+      <div id="demo-banner" class="demo-banner hidden"><strong id="demo-banner-title">DEMO</strong> <span id="demo-banner-copy">Sample orders only. Real jobs and accounts are not changed.</span>
+        <label id="preview-role-wrap" class="hidden">Preview as <select id="preview-role" aria-label="Preview as"></select></label>
+        <button type="button" class="btn btn-sm hidden" id="preview-signin">Sign in to live workspace</button>
         <button type="button" class="btn btn-sm" id="demo-play">Auto-play</button>
         <button type="button" class="btn btn-sm" id="demo-reset">Reset demo</button>
         <button type="button" class="btn btn-sm" id="demo-exit">Exit demo</button>

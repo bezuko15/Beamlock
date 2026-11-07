@@ -353,7 +353,7 @@
     state.reactions = (state.reactions || []).filter((item) => !(item.target_type === type && item.target_id === id && (item.kind || 'gotit') === kind && isMyReaction(item)));
     if (on) state.reactions.push(row);
     paintOpenJob();
-    if (state.demoOn) return;
+    if (state.demoOn) { commitPreview(); return; }
     if (!navigator.onLine) {
       await queueOffline({ id: 'react-' + type + '-' + id + '-' + kind, kind: 'reaction', at: Date.now(), targetType: type, targetId: id, jobId, reactKind: kind, on });
       toast((on ? '' : 'Removed ') + reactionLabel(kind) + ' on this device');
@@ -679,15 +679,15 @@
     if (input && name) input.value = name;
     $('#login-extra')?.classList.add('hidden');
   }
-  function showLogin(message) {
+  function showLiveSignIn(message) {
     $('#app')?.classList.add('hidden');
     $('#gate')?.classList.add('hidden');
     $('#login')?.classList.remove('hidden');
     paintRememberedLogin();
-    applyAppearance(defaultPrefs());
     const err = $('#login-error');
     if (err) { err.textContent = message || ''; err.classList.toggle('hidden', !message); }
   }
+  function showLogin(message) { showLiveSignIn(message); }
   function readonlyCopy(profile) {
     const who = profile.role === 'Admin' ? 'an admin' : 'a planner or admin';
     return 'Read only until ' + who + ' approves your ' + (profile.role || 'role') + ' role. You can look at jobs. You cannot change them yet.';
@@ -706,7 +706,9 @@
     state.jobs = [];
     try { await sb.auth.signOut({ scope: 'local' }); } catch (_) {}
     setTimeout(() => { state.explicitSignOut = false; }, 1000);
-    showLogin(message || '');
+    state.demoOn = false;
+    state.sandbox = false;
+    enterSandbox(message || '');
   }
   async function loadSignupRoles() {
     const { data, error } = await sb.rpc('signup_roles');
@@ -746,13 +748,13 @@
   async function openSession() {
     const { data: sessionData } = await sb.auth.getSession();
     const user = sessionData?.session?.user;
-    if (!user) { showLogin(''); return; }
+    if (!user) { enterSandbox(); return; }
     let profile = null;
     const { data, error } = await sb.from('profiles').select('*').eq('id', user.id).single();
     if (data) profile = data;
     else profile = cachedProfile(user.id);
     if (!profile) {
-      if (error && !navigator.onLine) { showLogin('Still offline. The saved session will open when the connection returns.'); return; }
+      if (error && !navigator.onLine) { enterSandbox('Still offline. The saved live session will open when the connection returns.'); return; }
       await signOut('This account has no profile.');
       return;
     }
@@ -760,6 +762,8 @@
     if (profile.status === 'rejected') { await signOut('This account was not approved.'); return; }
     localStorage.setItem('bl_profile_' + user.id, JSON.stringify(profile));
     if (profile.display_name) localStorage.setItem('bl_last_name', profile.display_name);
+    state.sandbox = false;
+    state.demoOn = false;
     state.adminPreview = localStorage.getItem('bl_admin_preview') || '';
     applyProfile(profile);
     watchProfile(profile.id);
@@ -813,7 +817,9 @@
     const viewing = state.user?.preview
       ? ' · viewing as ' + tradeLabel(state.user.preview)
       : (state.profile?.role === 'Operator' && state.profile?.acting_as ? ' · viewing as ' + tradeLabel(state.profile.acting_as) : '');
-    $('#user-label').textContent = state.user.name + ' · ' + state.user.realRole + (state.profile?.status === 'pending' ? ' · read only' : '') + viewing;
+    $('#user-label').textContent = state.sandbox
+      ? ('as ' + state.user.role)
+      : (state.user.name + ' · ' + state.user.realRole + (state.profile?.status === 'pending' ? ' · read only' : '') + viewing);
     const banner = $('#readonly-banner');
     if (banner) {
       const pending = state.profile?.status === 'pending';
@@ -825,7 +831,17 @@
     const seeDash = isApproved() && ['Supervisor', 'Planner', 'Admin'].includes(state.user?.role);
     $('#tab-dash')?.classList.toggle('hidden', !seeDash);
     $('#tab-turn')?.classList.toggle('hidden', !seeDash);
-    $('#btn-demo')?.classList.toggle('hidden', !isRealAdmin());
+    $('#btn-demo')?.classList.toggle('hidden', !!state.sandbox || !isRealAdmin());
+    const out = $('#btn-logout');
+    if (out) {
+      out.textContent = state.sandbox ? 'Sign in' : 'Sign out';
+      out.title = state.sandbox ? 'Sign in to live workspace' : 'Sign out of this device';
+    }
+    if (state.sandbox) {
+      const label = $('#live-label');
+      if (label) label.textContent = 'Preview';
+      $('#live-dot')?.classList.add('off');
+    }
     $('#adm-settings')?.classList.toggle('hidden', !isRealAdmin());
     $('#act-as-wrap')?.classList.toggle('hidden', state.profile?.role !== 'Operator');
     $('#admin-view-wrap')?.classList.toggle('hidden', !profileIsAdmin());
@@ -904,11 +920,25 @@
     restoreFilters();
     syncFilterControls();
     renderDataSource();
-    loadSafety().then(() => { if (state.view === 'safety') renderSafety(); }).catch(() => {});
+    if (!state.sandbox) loadSafety().then(() => { if (state.view === 'safety') renderSafety(); }).catch(() => {});
     startWeather();
     if (state.channels.main) { try { sb.removeChannel(state.channels.main); } catch (_) {} }
-    subscribeRealtime();
+    if (state.sandbox) {
+      state.channels.main = null;
+      const label = $('#live-label');
+      if (label) label.textContent = 'Preview';
+      $('#live-dot')?.classList.add('off');
+    } else subscribeRealtime();
     refreshAll(true);
+    if (state.sandbox) paintPreviewChrome();
+    else {
+      $('#demo-banner')?.classList.add('hidden');
+      $('#preview-role-wrap')?.classList.add('hidden');
+      $('#preview-signin')?.classList.add('hidden');
+      $('#demo-exit')?.classList.remove('hidden');
+      const reset = $('#demo-reset');
+      if (reset) reset.textContent = 'Reset demo';
+    }
     if ('serviceWorker' in navigator) {
       const hadController = !!navigator.serviceWorker.controller;
       navigator.serviceWorker.register('./sw.js').then((reg) => reg.update().catch(() => {})).catch(() => {});
@@ -1316,6 +1346,10 @@
   }
   function renderPlanner() { $('#planner-list').innerHTML = activeList().map(jobCard).join('') || '<div class="empty"><strong>No jobs yet</strong><p>Create one, or import a maintenance schedule.</p></div>'; }
   async function renderAudit() {
+    if (state.sandbox) {
+      $('#audit-list').innerHTML = '<div class="empty"><strong>Preview</strong><p>The live audit log is not loaded here.</p></div>';
+      return;
+    }
     const { data } = await sb.from('audit_log').select('*').order('created_at', { ascending: false }).limit(200);
     $('#audit-list').innerHTML = (data || []).map((a) =>
       '<div class="audit-item"><div class="t">' + fmtTime(a.created_at) + ' · ' + esc(a.actor_name || '—') + ' (' + esc(a.actor_role || '') + ')</div>' +
@@ -1323,6 +1357,10 @@
     ).join('') || '<div class="empty">No audit events.</div>';
   }
   function renderDataSource() {
+    if (state.sandbox) {
+      $('#datasource-bar').innerHTML = '<span class="pill">Preview on this device</span><span class="pill">Not the live workspace</span>';
+      return;
+    }
     const ds = state.settings?.data_source || {};
     $('#datasource-bar').innerHTML =
       '<span class="pill">Data source: ' + esc(ds.label || 'Supabase') + '</span>' +
@@ -1343,6 +1381,12 @@
   }
   async function saveAppTiles() {
     readAppDraft();
+    if (state.sandbox) {
+      commitPreview();
+      renderApps();
+      toast('Saved in preview. The live workspace was not changed.');
+      return;
+    }
     const kept = [];
     for (let i = 0; i < state.tiles.length; i++) {
       const tile = state.tiles[i];
@@ -1460,6 +1504,11 @@
     });
   }
   function renderAdmin() {
+    if (state.sandbox) {
+      const host = $('#adm-users');
+      if (host) host.innerHTML = '<div class="empty"><strong>Preview</strong><p>Live accounts are not loaded here. Sign in to the live workspace to manage people.</p></div>';
+      return;
+    }
     const tpl = state.settings?.url_templates || {};
     $('#adm-sap').value = tpl.sap || '';
     $('#adm-pv').value = tpl.permitVision || '';
@@ -1487,7 +1536,7 @@
   }
   async function renderUsers() {
     const host = $('#adm-users');
-    if (!host || !canManageUsers()) return;
+    if (!host || !canManageUsers() || state.sandbox) return;
     const { data, error } = await sb.from('profiles').select('*').order('created_at', { ascending: true });
     if (error) { host.innerHTML = '<p class="hold-banner">' + esc(error.message) + '</p>'; return; }
     const roles = (isRealAdmin() ? [{ id: 'Admin', label: 'Admin' }] : []).concat([
@@ -1950,6 +1999,10 @@
     });
     root.querySelector('[data-act="hold"]')?.addEventListener('click', async () => {
       const reason = prompt('Hold reason (permit, scaffold, parts, isolation…)'); if (!reason) return;
+      if (state.sandbox) {
+        job.on_hold = true; job.hold_reason = reason; job.hold_by = 'Preview'; job.status = 'on_hold';
+        commitPreview(); showJobModal(job); toast('Saved in preview. The live workspace was not changed.'); return;
+      }
       await sb.from('jobs').update({ on_hold: true, hold_reason: reason, hold_by: state.user.name, hold_at: new Date().toISOString(), status: 'on_hold', updated_at: new Date().toISOString() }).eq('id', job.id);
       await audit(job.id, 'hold', reason); await refreshAll(false); showJobModal(state.jobs.find((j) => j.id === job.id)); toast('Job on hold');
     });
@@ -1959,6 +2012,10 @@
     });
     root.querySelector('[data-act="archive"]')?.addEventListener('click', async () => {
       if (!confirm('Archive this job?')) return;
+      if (state.sandbox) {
+        state.demoJobs = (state.demoJobs || []).filter((item) => item.id !== job.id);
+        commitPreview(); root.innerHTML = ''; toast('Removed from preview. The live workspace was not changed.'); return;
+      }
       await sb.from('jobs').update({ archived: true, updated_at: new Date().toISOString() }).eq('id', job.id);
       await audit(job.id, 'archived', null); root.innerHTML = ''; await refreshAll(false); toast('Archived');
     });
@@ -2105,8 +2162,9 @@
           if (!body && !files.length) return toast('Comment required');
           job.comments = job.comments || [];
           job.comments.push({ id: 'demo-c-' + Date.now(), author_name: state.user.name, author_role: state.user.role, body: body || (form._voiceBlob ? '(voice note)' : '(photo)'), created_at: new Date().toISOString(), channel: form.dataset.step ? 'step' : 'general', section: form.dataset.section || null, step_id: form.dataset.step || null, audio_path: form._voiceBlob ? URL.createObjectURL(form._voiceBlob) : '' });
+          commitPreview();
           showJobModal(job);
-          toast('DEMO comment — not saved to the plant');
+          toast(state.sandbox ? 'Saved in preview. The live workspace was not changed.' : 'DEMO comment — not saved to the plant');
           return;
         }
         if (!navigator.onLine) {
@@ -2423,6 +2481,27 @@
           beam, updated_at: new Date().toISOString(),
         };
         if (!steps.length) return toast('Add at least one trade step');
+        if (state.sandbox) {
+          const built = steps.map((s, i) => ({
+            id: s.id || ('sandbox-step-' + Date.now() + '-' + i),
+            trade: s.trade, label: s.label, status: s.status || (i === 0 ? 'ready' : 'pending'), sort_order: i,
+            permit_holder: s.permit_holder || '', radio_channel: s.radio_channel || '',
+            skip_reason: s.skip_reason || null, skipped_by: s.skipped_by || null, skipped_at: s.skipped_at || null,
+            assignees: (s.assignees && s.assignees.length ? s.assignees : defaultAssignees(s.trade)).map((a, n) => ({ id: a.id || ('sandbox-a-' + i + '-' + n), person_name: a.person_name, signed_off: !!a.signed_off, signed_at: a.signed_at || null })),
+            beam: s.beam || {}, comments: s.comments || [],
+          }));
+          let job = existing;
+          if (job) Object.assign(job, payload, { steps: built });
+          else {
+            job = Object.assign({ id: 'sandbox-' + Date.now(), demo: true, archived: false, on_hold: false, comments: [], audit: [], created_by: 'Preview', created_at: new Date().toISOString(), status: 'not_started' }, payload, { steps: built });
+            state.demoJobs.unshift(job);
+          }
+          built.forEach((s) => { s.job_id = job.id; });
+          commitPreview();
+          showJobModal(job);
+          toast('Saved in preview. The live workspace was not changed.');
+          return;
+        }
         try {
           let jobId = existing?.id;
           if (existing) {
@@ -3067,6 +3146,87 @@
       { id: 'demo-r5', kind: 'clap', target_type: 'comment', target_id: 'demo-c1', job_id: 'demo-sru', user_id: 'demo-sup', actor_name: 'Demo Supervisor', created_at: now },
     ];
   }
+  function commitPreview() {
+    state.jobs = state.demoJobs;
+    if (!state.sandbox) return;
+    try {
+      localStorage.setItem('bl_sandbox_v1', JSON.stringify({
+        role: state.user?.role || 'Planner',
+        jobs: state.demoJobs,
+        reactions: state.reactions || [],
+        turnaround: state.demoTurnaround || null,
+        safety: state.previewSafety || [],
+        tiles: state.tiles || [],
+      }));
+    } catch (_) {}
+  }
+  function applyPreviewRole(role) {
+    const tradeIds = getTrades().map((t) => t.id);
+    const trade = tradeIds.includes(role) ? role : null;
+    state.user = { name: 'Preview', realRole: role, role: role, preview: '', trade: trade, personId: 'sandbox', status: 'approved' };
+    state.profile = { id: 'sandbox', display_name: 'Preview', role: role, status: 'approved', acting_as: '' };
+  }
+  function previewRoleChoices() {
+    const roles = [['Planner', 'Planner'], ['Supervisor', 'Supervisor'], ['Admin', 'Admin'], ['Operator', 'Operator']];
+    getTrades().forEach((t) => { if (!roles.some((pair) => pair[0] === t.id)) roles.push([t.id, t.label]); });
+    return roles;
+  }
+  function paintPreviewChrome() {
+    const banner = $('#demo-banner');
+    if (!banner) return;
+    banner.classList.toggle('hidden', !state.sandbox && !state.demoOn);
+    $('#preview-role-wrap')?.classList.toggle('hidden', !state.sandbox);
+    $('#preview-signin')?.classList.toggle('hidden', !state.sandbox);
+    $('#demo-exit')?.classList.toggle('hidden', !!state.sandbox);
+    if (!state.sandbox) return;
+    const title = $('#demo-banner-title');
+    const copy = $('#demo-banner-copy');
+    if (title) title.textContent = 'Preview';
+    if (copy) copy.textContent = 'Sample orders on this device. Not the live workspace. Real jobs and accounts are not changed.';
+    const sel = $('#preview-role');
+    if (sel && !sel.dataset.ready) {
+      sel.innerHTML = previewRoleChoices().map((pair) => '<option value="' + esc(pair[0]) + '">' + esc(pair[1]) + '</option>').join('');
+      sel.dataset.ready = '1';
+      sel.onchange = () => {
+        applyPreviewRole(sel.value);
+        commitPreview();
+        paintIdentity();
+        renderAll({ keepScroll: true });
+      };
+    }
+    if (sel) sel.value = state.user?.role || 'Planner';
+    const reset = $('#demo-reset');
+    if (reset) reset.textContent = 'Reset preview';
+  }
+  function previewTiles() {
+    return ['Digital twin', 'P&ID', 'PI Vision', 'UTL log'].map((name, i) => ({ id: 'preview-tile-' + i, icon: name.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase(), name: name, url: '', description: '', sort_order: i + 1 }));
+  }
+  function enterSandbox(message) {
+    state.sandbox = true;
+    state.demoOn = true;
+    state.adminPreview = '';
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem('bl_sandbox_v1') || 'null'); } catch (_) { saved = null; }
+    applyPreviewRole(saved?.role || 'Planner');
+    if (saved && Array.isArray(saved.jobs) && saved.jobs.length) {
+      state.demoJobs = saved.jobs;
+      state.jobs = saved.jobs;
+      state.reactions = Array.isArray(saved.reactions) ? saved.reactions : [];
+      state.demoTurnaround = saved.turnaround || null;
+      state.turnaroundId = state.demoTurnaround?.id || '';
+      state.previewSafety = Array.isArray(saved.safety) ? saved.safety : [];
+      state.tiles = Array.isArray(saved.tiles) && saved.tiles.length ? saved.tiles : previewTiles();
+    } else {
+      armDemo();
+      state.previewSafety = [];
+      state.tiles = previewTiles();
+      commitPreview();
+    }
+    state.safety = state.previewSafety || [];
+    $('#login')?.classList.add('hidden');
+    $('#gate')?.classList.add('hidden');
+    enterApp().then(() => { if (message) toast(message); }).catch(() => {});
+  }
   function startDemo() {
     if (!isRealAdmin()) return toast('Demo mode is for admins');
     state.demoOn = true;
@@ -3076,6 +3236,7 @@
     toast('Demo orders loaded. Real jobs were not changed.');
   }
   function stopDemo() {
+    if (state.sandbox) return;
     state.demoOn = false;
     if (state.demoTimer) { clearInterval(state.demoTimer); state.demoTimer = null; }
     $('#demo-play') && ($('#demo-play').textContent = 'Auto-play');
@@ -3086,8 +3247,14 @@
     if (!state.demoOn) return;
     if (state.demoTimer) { clearInterval(state.demoTimer); state.demoTimer = null; }
     armDemo();
+    if (state.sandbox) {
+      state.previewSafety = [];
+      state.safety = [];
+      state.tiles = previewTiles();
+    }
+    commitPreview();
     renderAll();
-    toast('Demo orders reset.');
+    toast(state.sandbox ? 'Preview orders reset on this device.' : 'Demo orders reset.');
   }
   function demoToggleSign(jobId, assigneeId, wasSigned) {
     const job = (state.demoJobs || []).find((j) => j.id === jobId);
@@ -3101,9 +3268,10 @@
     }
     window.BLPresent.advance(job);
     state.jobs = state.demoJobs;
+    commitPreview();
     renderAll();
     showJobModal(job);
-    toast('DEMO sign-off — not written to the plant');
+    toast(state.sandbox ? 'Saved in preview. The live workspace was not changed.' : 'DEMO sign-off — not written to the plant');
   }
   function toggleDemoPlay() {
     if (!state.demoOn) return;
@@ -3318,7 +3486,7 @@
     rememberLocalPrefs(state.prefs, Date.now());
     applyAppearance(state.prefs);
     paintPrefPreview();
-    if (!state.profile?.id) return;
+    if (!state.profile?.id || state.sandbox) return;
     if (!navigator.onLine) { state.prefsDirty = true; return; }
     if (prefsWriting) { prefsAgain = true; return; }
     prefsWriting = true;
@@ -3342,7 +3510,7 @@
     const local = readLocalPrefs();
     state.prefs = local;
     applyAppearance(local);
-    if (!state.profile?.id || !navigator.onLine) return;
+    if (state.sandbox || !state.profile?.id || !navigator.onLine) return;
     const started = Number(localStorage.getItem(prefsKey() + '_at') || 0);
     const { data, error } = await sb.from('user_preferences').select('prefs, updated_at').eq('user_id', state.profile.id).maybeSingle();
     if (error) return;
@@ -3403,12 +3571,16 @@
       '<p class="pref-note">Used the next time you sign in. Only pages your role can open are listed.</p>' +
       '<button type="button" class="btn" id="settings-reset">Reset my preferences</button></section>' +
       '<section class="pref-group"><h3>Sign-in code</h3>' +
+      (state.sandbox
+        ? '<p class="pref-note">Preview has no sign-in code. Sign in to the live workspace to change the code for a real account.</p><button type="button" class="btn" id="preview-settings-signin">Sign in to live workspace</button></section>'
+        : '') +
+      (state.sandbox ? '' :
       '<p class="pref-note">This changes the code for your own account. Your role stays the same. A connection is required. The code is not saved on this device.</p>' +
       '<form id="code-form" method="post" action="#" autocomplete="off">' +
       '<label class="lbl" for="code-current">Current sign-in code</label><input id="code-current" class="input" type="password" inputmode="numeric" autocomplete="current-password" autocapitalize="off" spellcheck="false" />' +
       '<label class="lbl" for="code-new">New sign-in code</label><input id="code-new" class="input" type="password" inputmode="numeric" autocomplete="new-password" autocapitalize="off" spellcheck="false" />' +
       '<label class="lbl" for="code-confirm">Confirm new sign-in code</label><input id="code-confirm" class="input" type="password" inputmode="numeric" autocomplete="new-password" autocapitalize="off" spellcheck="false" />' +
-      '<p id="code-error" class="hold-banner hidden"></p><button type="submit" class="btn btn-primary" id="code-save">Change sign-in code</button></form></section>';
+      '<p id="code-error" class="hold-banner hidden"></p><button type="submit" class="btn btn-primary" id="code-save">Change sign-in code</button></form></section>');
     paintPrefPreview();
     paintInstall();
     host.querySelectorAll('[data-pref]').forEach((el) => {
@@ -3431,6 +3603,7 @@
       playAlertSound();
       state.prefs.sound = previous;
     });
+    $('#preview-settings-signin') && ($('#preview-settings-signin').onclick = () => showLiveSignIn(''));
     $('#settings-reset') && ($('#settings-reset').onclick = async () => {
       if (!confirm('Reset your preferences to the defaults? Jobs and other people are not changed.')) return;
       const y = window.scrollY;
@@ -3608,6 +3781,10 @@
     });
   }
   async function loadSafety() {
+    if (state.sandbox) {
+      state.safety = state.previewSafety || [];
+      return;
+    }
     if (!navigator.onLine) {
       try { state.safety = normalizeSafety(JSON.parse(localStorage.getItem('bl_safety') || '[]')); } catch { state.safety = []; }
       localStorage.setItem('bl_safety', JSON.stringify(state.safety));
@@ -3674,7 +3851,7 @@
       const showersNext = lines('showers').map((line) => { const [id, location] = line.split('|'); return { id: (id || '').trim(), location: (location || '').trim() }; });
       let mapPath = row?.map_path || '';
       const file = form.map.files?.[0];
-      if (file) {
+      if (file && !state.sandbox) {
         const blob = await resizeImage(file, 1280);
         const path = 'safety/' + unit + '-' + Date.now() + '.jpg';
         const up = await sb.storage.from('comment-photos').upload(path, blob, { contentType: 'image/jpeg' });
@@ -3682,6 +3859,14 @@
         mapPath = 'comment-photos/' + path;
       }
       const payload = { unit, muster_unit: form.muster_unit.value.trim(), muster_site: form.muster_site.value.trim(), phones: phonesNext, showers: showersNext, firehall_number: form.firehall_number.value.trim(), security_number: form.security_number.value.trim(), panel_number: form.panel_number.value.trim(), notes: form.notes.value.trim(), map_path: mapPath, updated_at: new Date().toISOString(), updated_by: state.user.name };
+      if (state.sandbox) {
+        state.previewSafety = (state.previewSafety || []).filter((s) => s.unit !== unit).concat(payload);
+        state.safety = state.previewSafety;
+        commitPreview();
+        renderSafety();
+        toast('Saved in preview. The live workspace was not changed.');
+        return;
+      }
       const { error } = await sb.from('unit_safety').upsert(payload);
       if (error) return toast(error.message);
       await loadSafety();
@@ -3914,7 +4099,9 @@
     $('#btn-import').onclick = openImport;
     $('#btn-export').onclick = exportExcel;
     $('#btn-audit-refresh').onclick = renderAudit;
-    $('#btn-logout').onclick = () => signOut('');
+    $('#btn-logout').onclick = () => { if (state.sandbox) showLiveSignIn(''); else signOut(''); };
+    $('#login-back') && ($('#login-back').onclick = () => enterSandbox());
+    $('#preview-signin') && ($('#preview-signin').onclick = () => showLiveSignIn(''));
     $('#btn-demo') && ($('#btn-demo').onclick = () => state.demoOn ? stopDemo() : startDemo());
     $('#demo-exit') && ($('#demo-exit').onclick = stopDemo);
     $('#demo-reset') && ($('#demo-reset').onclick = resetDemo);
@@ -4016,6 +4203,7 @@
       } catch { toast('Notifications blocked'); }
     };
     $('#adm-save').onclick = async () => {
+      if (state.sandbox) return toast('Preview does not change live site setup.');
       try {
         const tiles = $$('#adm-tiles .tile-edit').map((row, i) => ({
           id: (state.tiles[i] || {}).id || ('tile-' + i),
@@ -4084,11 +4272,10 @@
   sb.auth.onAuthStateChange(async (event) => {
     if (event !== 'SIGNED_OUT' || state.explicitSignOut || state.changingCode) return;
     const { data } = await sb.auth.getSession();
-    if (!data?.session && state.user) showLogin('');
+    if (!data?.session && state.user && !state.sandbox) enterSandbox('The live session ended. Preview is open.');
   });
   sb.auth.getSession().then(({ data }) => {
-    if (data?.session) return openSession();
-    showLogin('');
-    return loadSignupRoles();
-  }).catch((e) => { console.error(e); showLogin('Could not reach the account service.'); });
+    if (data?.session?.user) return openSession();
+    enterSandbox();
+  }).catch((e) => { console.error(e); enterSandbox('Could not reach the account service. Preview is open.'); });
 })();
